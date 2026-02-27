@@ -2,6 +2,12 @@ syntax = "proto3";
 
 package example;
 
+import "cleanproto/options.proto";
+
+option go_package = "example";
+option (cleanproto.go_out) = ".build/go";
+option (cleanproto.js_out) = ".build/js";
+
 message Book {
   string id = 1;
   string title = 2;

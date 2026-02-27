@@ -40,10 +40,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "no proto files provided")
 		os.Exit(1)
 	}
-	if goOut == "" && jsOut == "" {
-		fmt.Fprintln(os.Stderr, "at least one of -go_out or -js_out is required")
-		os.Exit(1)
-	}
 	if len(importPaths) == 0 {
 		importPaths = append(importPaths, ".")
 	}
@@ -54,6 +50,19 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	if goOut == "" && jsOut == "" {
+		hasOut := false
+		for _, file := range files {
+			if file.GoOut != "" || file.JsOut != "" {
+				hasOut = true
+				break
+			}
+		}
+		if !hasOut {
+			fmt.Fprintln(os.Stderr, "at least one of -go_out, -js_out, cleanproto.go_out, or cleanproto.js_out is required")
+			os.Exit(1)
+		}
 	}
 
 	options := generate.Options{

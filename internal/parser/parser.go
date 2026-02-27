@@ -3,6 +3,8 @@ package parser
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"cleanproto/internal/ir"
@@ -16,7 +18,15 @@ type Parser struct {
 }
 
 func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, error) {
-	resolver := &protocompile.SourceResolver{ImportPaths: p.ImportPaths}
+	resolver := &protocompile.SourceResolver{
+		ImportPaths: p.ImportPaths,
+		Accessor: func(path string) (io.ReadCloser, error) {
+			if path == optionsProtoPath || strings.HasSuffix(path, string(os.PathSeparator)+optionsProtoPath) {
+				return io.NopCloser(strings.NewReader(optionsProtoSource)), nil
+			}
+			return os.Open(path)
+		},
+	}
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(resolver),
 	}
@@ -37,9 +47,27 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 }
 
 func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
+	if file.Syntax() != protoreflect.Proto3 {
+		return ir.File{}, fmt.Errorf("only proto3 is supported: %s", file.Path())
+	}
+	jsOut, err := jsOutFromOptions(file)
+	if err != nil {
+		return ir.File{}, err
+	}
+	goOut, err := goOutFromOptions(file)
+	if err != nil {
+		return ir.File{}, err
+	}
+	goPkg := goPackageFromOptions(file)
+	if goPkg == "" {
+		goPkg = string(file.Package())
+	}
 	out := ir.File{
-		Path:    file.Path(),
-		Package: string(file.Package()),
+		Path:      file.Path(),
+		Package:   string(file.Package()),
+		GoPackage: goPkg,
+		GoOut:     goOut,
+		JsOut:     jsOut,
 	}
 	msgs, err := collectMessages(file.Messages(), nil)
 	if err != nil {
@@ -119,12 +147,13 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		} else if kind == ir.KindEnum {
 			enumName = string(field.Enum().FullName())
 		}
+		isOptional := field.HasPresence() && !field.IsList() && !field.IsMap() && field.Kind() != protoreflect.MessageKind
 		result = append(result, ir.Field{
 			Name:            ir.JsName(string(field.Name())),
 			Number:          int(field.Number()),
 			Kind:            kind,
 			IsRepeated:      field.IsList(),
-			IsOptional:      field.Cardinality() == protoreflect.Optional,
+			IsOptional:      isOptional,
 			IsPacked:        field.IsPacked(),
 			IsMap:           isMap,
 			MapKeyKind:      mapKeyKind,

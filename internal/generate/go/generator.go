@@ -20,12 +20,6 @@ func (g Generator) Name() string {
 }
 
 func (g Generator) Generate(files []ir.File, options generate.Options) ([]generate.OutputFile, error) {
-	if options.GoOut == "" {
-		return nil, nil
-	}
-	if options.GoPackage == "" {
-		return nil, fmt.Errorf("go package name is required")
-	}
 	tmpl, err := template.ParseFS(templates.FS, "go_file.tmpl")
 	if err != nil {
 		return nil, err
@@ -33,8 +27,28 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 
 	msgIndex := indexMessages(files)
 	var outputs []generate.OutputFile
+	var utilPkg string
+	var utilDir string
 	for _, file := range files {
-		data, err := buildGoFileData(file, msgIndex, options.GoPackage)
+		goOut := options.GoOut
+		if goOut == "" {
+			goOut = file.GoOut
+		}
+		if goOut == "" {
+			continue
+		}
+		pkg := options.GoPackage
+		if pkg == "" {
+			pkg = file.GoPackage
+		}
+		if pkg == "" {
+			return nil, fmt.Errorf("go package name is required (set -go_pkg or option go_package)")
+		}
+		if utilPkg == "" {
+			utilPkg = pkg
+			utilDir = goOut
+		}
+		data, err := buildGoFileData(file, msgIndex, pkg)
 		if err != nil {
 			return nil, err
 		}
@@ -43,18 +57,21 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			return nil, err
 		}
 		base := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
-		outPath := filepath.Join(options.GoOut, base+"_cp.pb.go")
+		outPath := filepath.Join(goOut, base+"_cp.pb.go")
 		outputs = append(outputs, generate.OutputFile{
 			Path:    outPath,
 			Content: buf.Bytes(),
 		})
 	}
-	utilContent, err := loadUtilSource(options.GoPackage)
+	if len(outputs) == 0 {
+		return nil, nil
+	}
+	utilContent, err := loadUtilSource(utilPkg)
 	if err != nil {
 		return nil, err
 	}
 	outputs = append(outputs, generate.OutputFile{
-		Path:    filepath.Join(options.GoOut, "util.go"),
+		Path:    filepath.Join(utilDir, "util.go"),
 		Content: utilContent,
 	})
 	return outputs, nil
@@ -426,7 +443,6 @@ func goMapValueType(field ir.Field, msgIndex map[string]ir.Message) (string, boo
 
 func goEncodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Message) ([]string, error) {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("if len(%s) > 0 {", fieldName))
 	lines = append(lines, fmt.Sprintf("for key, value := range %s {", fieldName))
 	lines = append(lines, "var entry []byte")
 	keyField := ir.Field{Number: 1, Kind: field.MapKeyKind}
@@ -463,67 +479,28 @@ func goEncodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Messag
 	lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
 	lines = append(lines, "b = protowire.AppendBytes(b, entry)")
 	lines = append(lines, "}")
-	lines = append(lines, "}")
 	return lines, nil
 }
 
 func goDecodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Message) ([]string, bool, error) {
 	var lines []string
-	lines = append(lines, "b, msgBytes, err = ConsumeMessage(b, typ)")
-	lines = append(lines, "if err != nil {", "return nil, err", "}")
-	lines = append(lines, "var keySet bool")
-	lines = append(lines, fmt.Sprintf("var key %s", mustGoMapKeyType(field.MapKeyKind)))
-	lines = append(lines, fmt.Sprintf("var value %s", mustGoMapValueType(field, msgIndex)))
-	lines = append(lines, "var num2 protowire.Number")
-	lines = append(lines, "var typ2 protowire.Type")
-	lines = append(lines, "var err2 error")
-	lines = append(lines, "entryBytes := msgBytes")
-	lines = append(lines, "for len(entryBytes) > 0 {")
-	lines = append(lines, "entryBytes, num2, typ2, err2 = ConsumeTag(entryBytes)")
-	lines = append(lines, "if err2 != nil {", "return nil, err2", "}")
-	lines = append(lines, "switch num2 {")
-	lines = append(lines, "case 1:")
-	keyLines, err := goDecodeMapScalar(field.MapKeyKind, "key", "entryBytes")
+	keyConsume, err := goConsumeFunc(ir.Field{Kind: field.MapKeyKind})
 	if err != nil {
 		return nil, false, err
 	}
-	lines = append(lines, prefixLines(keyLines, "")...)
-	lines = append(lines, "keySet = true")
-	lines = append(lines, "case 2:")
-	if field.MapValueKind == ir.KindMessage {
-		msg, ok := msgIndex[field.MapValueMessage]
-		if !ok {
-			return nil, false, fmt.Errorf("unknown map value message: %s", field.MapValueMessage)
-		}
-		lines = append(lines, "var msgItem []byte")
-		lines = append(lines, "entryBytes, msgItem, err2 = ConsumeMessage(entryBytes, typ2)")
-		lines = append(lines, "if err2 != nil {", "return nil, err2", "}")
-		lines = append(lines, fmt.Sprintf("value, err2 = Decode%s(msgItem)", msg.Name))
-		lines = append(lines, "if err2 != nil {", "return nil, err2", "}")
-	} else if field.MapValueKind == ir.KindBytes {
-		lines = append(lines, "var tmp []byte")
-		lines = append(lines, "entryBytes, tmp, err2 = ConsumeBytes(entryBytes, typ2)")
-		lines = append(lines, "if err2 != nil {", "return nil, err2", "}")
-		lines = append(lines, "value = append([]byte(nil), tmp...)")
-	} else {
-		valLines, err := goDecodeMapScalar(field.MapValueKind, "value", "entryBytes")
-		if err != nil {
-			return nil, false, err
-		}
-		lines = append(lines, prefixLines(valLines, "")...)
+	valConsume, err := goConsumeMapValueFunc(field, msgIndex)
+	if err != nil {
+		return nil, false, err
 	}
-	lines = append(lines, "default:")
-	lines = append(lines, "entryBytes, err2 = SkipFieldValue(entryBytes, num2, typ2)")
-	lines = append(lines, "if err2 != nil {", "return nil, err2", "}")
-	lines = append(lines, "}")
-	lines = append(lines, "}")
+	lines = append(lines, fmt.Sprintf("var mapKey %s", mustGoMapKeyType(field.MapKeyKind)))
+	lines = append(lines, fmt.Sprintf("var mapValue %s", mustGoMapValueType(field, msgIndex)))
+	lines = append(lines, fmt.Sprintf("b, mapKey, mapValue, err = ConsumeMapEntry(b, typ, %s, %s)", keyConsume, valConsume))
+	lines = append(lines, "if err != nil {", "return nil, err", "}")
 	lines = append(lines, fmt.Sprintf("if %s == nil {", fieldName))
 	lines = append(lines, fmt.Sprintf("%s = make(map[%s]%s)", fieldName, mustGoMapKeyType(field.MapKeyKind), mustGoMapValueType(field, msgIndex)))
 	lines = append(lines, "}")
-	lines = append(lines, "if keySet {")
-	lines = append(lines, fmt.Sprintf("%s[key] = value", fieldName))
-	lines = append(lines, "}")
-	return lines, true, nil
+	lines = append(lines, fmt.Sprintf("%s[mapKey] = mapValue", fieldName))
+	return lines, false, nil
 }
 
 func goDecodeMapScalar(kind ir.Kind, target string, bufName string) ([]string, error) {
@@ -587,7 +564,6 @@ func isGoPackable(kind ir.Kind) bool {
 
 func goEncodePacked(fieldName string, field ir.Field) ([]string, error) {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("if len(%s) > 0 {", fieldName))
 	lines = append(lines, "var packed []byte")
 	lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
 	packedLines, err := goEncodePackedItem("item", field)
@@ -596,6 +572,7 @@ func goEncodePacked(fieldName string, field ir.Field) ([]string, error) {
 	}
 	lines = append(lines, packedLines...)
 	lines = append(lines, "}")
+	lines = append(lines, "if len(packed) > 0 {")
 	lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
 	lines = append(lines, "b = protowire.AppendBytes(b, packed)")
 	lines = append(lines, "}")
@@ -790,13 +767,7 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 			c.Lines = append(c.Lines, "if err2 != nil {", "return nil, err2", "}")
 			c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
 		case field.IsRepeated:
-			if field.IsPacked && isGoPackable(field.Kind) {
-				lines, err := goDecodePacked(fieldName, field)
-				if err != nil {
-					return nil, false, false, err
-				}
-				c.Lines = append(c.Lines, lines...)
-			} else {
+			if field.Kind == ir.KindMessage {
 				decodeLines, tmpBytes, err := goDecodeScalar(field, "item")
 				if err != nil {
 					return nil, false, false, err
@@ -806,6 +777,21 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 				}
 				c.Lines = append(c.Lines, decodeLines...)
 				c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+			} else {
+				consumeCall, err := goConsumeFunc(field)
+				if err != nil {
+					return nil, false, false, err
+				}
+				if field.IsPacked && isGoPackable(field.Kind) {
+					elemTyp := goWireType(field.Kind)
+					c.Lines = append(c.Lines, fmt.Sprintf("b, %s, err = ConsumeRepeatedCompact(b, typ, %s, %s)", fieldName, elemTyp, consumeCall))
+					c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
+				} else {
+					c.Lines = append(c.Lines, fmt.Sprintf("var item %s", mustGoSliceElemType(field, msgIndex)))
+					c.Lines = append(c.Lines, fmt.Sprintf("b, item, err = ConsumeRepeatedElement(b, typ, %s)", consumeCall))
+					c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
+					c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+				}
 			}
 		case field.Kind == ir.KindMessage:
 			needsMsgBytes = true
@@ -817,15 +803,11 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 			c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
 			c.Lines = append(c.Lines, fmt.Sprintf("%s = item", fieldName))
 		case field.IsOptional:
-			decodeLines, tmpBytes, err := goDecodeScalar(field, "item")
+			decodeLines, err := goDecodeOptionalScalar(field, fieldName)
 			if err != nil {
 				return nil, false, false, err
 			}
-			if tmpBytes {
-				needsTmpBytes = true
-			}
 			c.Lines = append(c.Lines, decodeLines...)
-			c.Lines = append(c.Lines, fmt.Sprintf("%s = &item", fieldName))
 		default:
 			decodeLines, tmpBytes, err := goDecodeScalar(field, fieldName)
 			if err != nil {
@@ -839,6 +821,20 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 		cases = append(cases, c)
 	}
 	return cases, needsMsgBytes, needsTmpBytes, nil
+}
+
+func goOptionalVarType(field ir.Field) (string, error) {
+	switch field.Kind {
+	case ir.KindBytes:
+		return "[]byte", nil
+	case ir.KindString:
+		return "string", nil
+	case ir.KindBool:
+		return "bool", nil
+	default:
+		t, _, err := goScalarType(field.Kind, false)
+		return t, err
+	}
 }
 
 func goDecodeScalar(field ir.Field, name string) ([]string, bool, error) {
@@ -925,6 +921,171 @@ func goDecodeScalar(field ir.Field, name string) ([]string, bool, error) {
 	}
 }
 
+func goDecodeOptionalScalar(field ir.Field, fieldName string) ([]string, error) {
+	switch field.Kind {
+	case ir.KindString:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeStringOpt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindBytes:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeBytesOpt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindBool:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeBoolOpt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindFloat:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeFloat32Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindDouble:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeFloat64Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindInt32, ir.KindEnum:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeVarInt32Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindSint32:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeSint32Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindUint32:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeVarUint32Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindInt64:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeVarInt64Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindSint64:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeSint64Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindUint64:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeVarUint64Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindFixed32:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeFixedUint32Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindFixed64:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeFixedUint64Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindSfixed32:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeSfixed32Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	case ir.KindSfixed64:
+		return []string{
+			fmt.Sprintf("b, %s, err = ConsumeSfixed64Opt(b, typ)", fieldName),
+			"if err != nil {", "return nil, err", "}",
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported optional decode kind: %v", field.Kind)
+	}
+}
+
+func goConsumeFunc(field ir.Field) (string, error) {
+	switch field.Kind {
+	case ir.KindString:
+		return "ConsumeString", nil
+	case ir.KindBytes:
+		return "ConsumeBytesCopy", nil
+	case ir.KindBool:
+		return "ConsumeBool", nil
+	case ir.KindFloat:
+		return "ConsumeFloat32", nil
+	case ir.KindDouble:
+		return "ConsumeFloat64", nil
+	case ir.KindInt32, ir.KindEnum:
+		return "ConsumeVarInt32", nil
+	case ir.KindSint32:
+		return "ConsumeSint32", nil
+	case ir.KindUint32:
+		return "ConsumeVarUint32", nil
+	case ir.KindInt64:
+		return "ConsumeVarInt64", nil
+	case ir.KindSint64:
+		return "ConsumeSint64", nil
+	case ir.KindUint64:
+		return "ConsumeVarUint64", nil
+	case ir.KindFixed32:
+		return "ConsumeFixedUint32", nil
+	case ir.KindFixed64:
+		return "ConsumeFixedUint64", nil
+	case ir.KindSfixed32:
+		return "ConsumeSfixed32", nil
+	case ir.KindSfixed64:
+		return "ConsumeSfixed64", nil
+	default:
+		return "", fmt.Errorf("unsupported consume kind: %v", field.Kind)
+	}
+}
+
+func goConsumeMapValueFunc(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
+	switch field.MapValueKind {
+	case ir.KindMessage:
+		msg, ok := msgIndex[field.MapValueMessage]
+		if !ok {
+			return "", fmt.Errorf("unknown map value message: %s", field.MapValueMessage)
+		}
+		return "ConsumeMessageDecorator(Decode" + msg.Name + ")", nil
+	case ir.KindBytes:
+		return "ConsumeBytes", nil
+	default:
+		return goConsumeFunc(ir.Field{Kind: field.MapValueKind})
+	}
+}
+
+func goWireType(kind ir.Kind) string {
+	switch kind {
+	case ir.KindString, ir.KindBytes, ir.KindMessage:
+		return "protowire.BytesType"
+	case ir.KindFixed32, ir.KindSfixed32, ir.KindFloat:
+		return "protowire.Fixed32Type"
+	case ir.KindFixed64, ir.KindSfixed64, ir.KindDouble:
+		return "protowire.Fixed64Type"
+	default:
+		return "protowire.VarintType"
+	}
+}
+
+func mustGoSliceElemType(field ir.Field, msgIndex map[string]ir.Message) string {
+	if field.Kind == ir.KindMessage {
+		msg, ok := msgIndex[field.MessageFullName]
+		if !ok {
+			panic(fmt.Errorf("unknown message type: %s", field.MessageFullName))
+		}
+		return "*" + msg.Name
+	}
+	if field.Kind == ir.KindBytes {
+		return "[]byte"
+	}
+	name, _, err := goScalarType(field.Kind, false)
+	if err != nil {
+		panic(err)
+	}
+	return name
+}
+
 func indexMessages(files []ir.File) map[string]ir.Message {
 	index := make(map[string]ir.Message)
 	for _, file := range files {
@@ -942,5 +1103,263 @@ func loadUtilSource(pkg string) ([]byte, error) {
 		return nil, fmt.Errorf("read protowireu source: %w", err)
 	}
 	updated := strings.Replace(string(content), "package protowireu", "package "+pkg, 1)
+	trimmed := strings.TrimSpace(updated)
+	if !strings.HasPrefix(trimmed, "package ") {
+		updated = "package " + pkg + "\n\n" + updated
+	}
+	updated += "\n\n" + utilExtra
 	return []byte(updated), nil
 }
+
+const utilExtra = `
+func ConsumeMapEntry[K comparable, V any](b []byte, typ protowire.Type, consumeK func([]byte, protowire.Type) ([]byte, K, error), consumeV func([]byte, protowire.Type) ([]byte, V, error)) ([]byte, K, V, error) {
+	var key K
+	var value V
+	if typ != protowire.BytesType {
+		return nil, key, value, errInvalidWireType
+	}
+	var entryBytes []byte
+	var err error
+	b, entryBytes, err = ConsumeMessage(b, typ)
+	if err != nil {
+		return nil, key, value, err
+	}
+	for len(entryBytes) > 0 {
+		var num protowire.Number
+		var t protowire.Type
+		var err2 error
+		entryBytes, num, t, err2 = ConsumeTag(entryBytes)
+		if err2 != nil {
+			return nil, key, value, err2
+		}
+		switch num {
+		case 1:
+			entryBytes, key, err2 = consumeK(entryBytes, t)
+			if err2 != nil {
+				return nil, key, value, err2
+			}
+		case 2:
+			entryBytes, value, err2 = consumeV(entryBytes, t)
+			if err2 != nil {
+				return nil, key, value, err2
+			}
+		default:
+			entryBytes, err2 = SkipFieldValue(entryBytes, num, t)
+			if err2 != nil {
+				return nil, key, value, err2
+			}
+		}
+	}
+	return b, key, value, nil
+}
+
+func ConsumeMessageDecorator[T any](decodeFunc func([]byte) (T, error)) func(b []byte, typ protowire.Type) ([]byte, T, error) {
+	return func(b []byte, typ protowire.Type) ([]byte, T, error) {
+		var zeroV T
+		var msgBytes []byte
+		var err error
+		b, msgBytes, err = ConsumeMessage(b, typ)
+		if err != nil {
+			return nil, zeroV, err
+		}
+		msg, err := decodeFunc(msgBytes)
+		if err != nil {
+			return nil, zeroV, err
+		}
+		return b, msg, nil
+	}
+}
+
+func ConsumeRepeatedElement[T any](b []byte, typ protowire.Type, consume func([]byte, protowire.Type) ([]byte, T, error)) ([]byte, T, error) {
+	var item T
+	var err error
+	b, item, err = consume(b, typ)
+	if err != nil {
+		return nil, item, err
+	}
+	return b, item, nil
+}
+
+func ConsumeRepeatedCompact[T any](b []byte, typ protowire.Type, elemTyp protowire.Type, consume func([]byte, protowire.Type) ([]byte, T, error)) ([]byte, []T, error) {
+	if typ != protowire.BytesType || elemTyp == protowire.BytesType {
+		return nil, nil, errInvalidWireType
+	}
+	var packed []byte
+	var err error
+	b, packed, err = ConsumeBytes(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	var items []T
+	for len(packed) > 0 {
+		var v T
+		packed, v, err = consume(packed, elemTyp)
+		if err != nil {
+			return nil, nil, err
+		}
+		items = append(items, v)
+	}
+	return b, items, nil
+}
+
+func ConsumeVarInt32Opt(b []byte, typ protowire.Type) ([]byte, *int32, error) {
+	var v int32
+	var err error
+	b, v, err = ConsumeVarInt32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeVarInt64Opt(b []byte, typ protowire.Type) ([]byte, *int64, error) {
+	var v int64
+	var err error
+	b, v, err = ConsumeVarInt64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeVarUint32Opt(b []byte, typ protowire.Type) ([]byte, *uint32, error) {
+	var v uint32
+	var err error
+	b, v, err = ConsumeVarUint32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeVarUint64Opt(b []byte, typ protowire.Type) ([]byte, *uint64, error) {
+	var v uint64
+	var err error
+	b, v, err = ConsumeVarUint64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeSint32Opt(b []byte, typ protowire.Type) ([]byte, *int32, error) {
+	var v int32
+	var err error
+	b, v, err = ConsumeSint32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeSint64Opt(b []byte, typ protowire.Type) ([]byte, *int64, error) {
+	var v int64
+	var err error
+	b, v, err = ConsumeSint64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeFixedUint32Opt(b []byte, typ protowire.Type) ([]byte, *uint32, error) {
+	var v uint32
+	var err error
+	b, v, err = ConsumeFixedUint32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeFixedUint64Opt(b []byte, typ protowire.Type) ([]byte, *uint64, error) {
+	var v uint64
+	var err error
+	b, v, err = ConsumeFixedUint64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeSfixed32Opt(b []byte, typ protowire.Type) ([]byte, *int32, error) {
+	var v int32
+	var err error
+	b, v, err = ConsumeSfixed32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeSfixed64Opt(b []byte, typ protowire.Type) ([]byte, *int64, error) {
+	var v int64
+	var err error
+	b, v, err = ConsumeSfixed64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeFloat32Opt(b []byte, typ protowire.Type) ([]byte, *float32, error) {
+	var v float32
+	var err error
+	b, v, err = ConsumeFloat32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeFloat64Opt(b []byte, typ protowire.Type) ([]byte, *float64, error) {
+	var v float64
+	var err error
+	b, v, err = ConsumeFloat64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeBoolOpt(b []byte, typ protowire.Type) ([]byte, *bool, error) {
+	var v bool
+	var err error
+	b, v, err = ConsumeBool(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeStringOpt(b []byte, typ protowire.Type) ([]byte, *string, error) {
+	var v string
+	var err error
+	b, v, err = ConsumeString(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
+func ConsumeBytesOpt(b []byte, typ protowire.Type) ([]byte, *[]byte, error) {
+	var v []byte
+	var err error
+	b, v, err = ConsumeBytes(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	copyBytes := append([]byte(nil), v...)
+	return b, &copyBytes, nil
+}
+
+func ConsumeBytesCopy(b []byte, typ protowire.Type) ([]byte, []byte, error) {
+	var v []byte
+	var err error
+	b, v, err = ConsumeBytes(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, append([]byte(nil), v...), nil
+}
+`

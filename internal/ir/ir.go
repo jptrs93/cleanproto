@@ -1,9 +1,12 @@
 package ir
 
 type File struct {
-	Path     string
-	Package  string
-	Messages []Message
+	Path      string
+	Package   string
+	GoPackage string
+	GoOut     string
+	JsOut     string
+	Messages  []Message
 }
 
 type Message struct {

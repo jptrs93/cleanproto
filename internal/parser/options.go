@@ -1,0 +1,89 @@
+package parser
+
+import (
+	"strings"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/runtime/protoimpl"
+	"google.golang.org/protobuf/types/descriptorpb"
+)
+
+const optionsProtoPath = "cleanproto/options.proto"
+
+const optionsProtoSource = `
+syntax = "proto3";
+
+package cleanproto;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.FileOptions {
+  string go_out = 50000;
+  string js_out = 50001;
+}
+`
+
+var E_JsOut = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FileOptions)(nil),
+	ExtensionType: (*string)(nil),
+	Field:         50001,
+	Name:          "cleanproto.js_out",
+	Tag:           "bytes,50001,opt,name=js_out",
+	Filename:      optionsProtoPath,
+}
+
+var E_GoOut = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FileOptions)(nil),
+	ExtensionType: (*string)(nil),
+	Field:         50000,
+	Name:          "cleanproto.go_out",
+	Tag:           "bytes,50000,opt,name=go_out",
+	Filename:      optionsProtoPath,
+}
+
+func jsOutFromOptions(file protoreflect.FileDescriptor) (string, error) {
+	opts, ok := file.Options().(*descriptorpb.FileOptions)
+	if !ok || opts == nil {
+		return "", nil
+	}
+	val := proto.GetExtension(opts, E_JsOut)
+	str, ok := val.(string)
+	if !ok {
+		return "", nil
+	}
+	return str, nil
+}
+
+func goOutFromOptions(file protoreflect.FileDescriptor) (string, error) {
+	opts, ok := file.Options().(*descriptorpb.FileOptions)
+	if !ok || opts == nil {
+		return "", nil
+	}
+	val := proto.GetExtension(opts, E_GoOut)
+	str, ok := val.(string)
+	if !ok {
+		return "", nil
+	}
+	return str, nil
+}
+
+func goPackageFromOptions(file protoreflect.FileDescriptor) string {
+	opts, ok := file.Options().(*descriptorpb.FileOptions)
+	if !ok || opts == nil {
+		return ""
+	}
+	goPkg := opts.GetGoPackage()
+	if goPkg == "" {
+		return ""
+	}
+	if strings.Contains(goPkg, ";") {
+		parts := strings.Split(goPkg, ";")
+		return parts[len(parts)-1]
+	}
+	goPkg = strings.TrimSuffix(goPkg, "/")
+	if idx := strings.LastIndex(goPkg, "/"); idx != -1 {
+		return goPkg[idx+1:]
+	}
+	return goPkg
+}

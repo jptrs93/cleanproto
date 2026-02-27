@@ -19,9 +19,6 @@ func (g Generator) Name() string {
 }
 
 func (g Generator) Generate(files []ir.File, options generate.Options) ([]generate.OutputFile, error) {
-	if options.JsOut == "" {
-		return nil, nil
-	}
 	tmpl, err := template.ParseFS(templates.FS, "js_file.tmpl")
 	if err != nil {
 		return nil, err
@@ -29,6 +26,13 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	msgIndex := indexMessages(files)
 	var outputs []generate.OutputFile
 	for _, file := range files {
+		jsOut := options.JsOut
+		if jsOut == "" {
+			jsOut = file.JsOut
+		}
+		if jsOut == "" {
+			continue
+		}
 		data, err := buildJSFileData(file, msgIndex)
 		if err != nil {
 			return nil, err
@@ -38,7 +42,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			return nil, err
 		}
 		base := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
-		outPath := filepath.Join(options.JsOut, base+".js")
+		outPath := filepath.Join(jsOut, base+".js")
 		outputs = append(outputs, generate.OutputFile{
 			Path:    outPath,
 			Content: buf.Bytes(),
@@ -135,7 +139,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			b.WriteString(").length > 0) {\n")
 			b.WriteString("        for (const [rawKey, value] of Object.entries(message.")
 			b.WriteString(field.Name)
-			b.WriteString(") {\n")
+			b.WriteString(")) {\n")
 			b.WriteString("            const key = ")
 			b.WriteString(jsMapKeyCast(field.MapKeyKind))
 			b.WriteString(";\n")
@@ -161,20 +165,20 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			if field.IsPacked && jsIsPackable(field.Kind) {
 				b.WriteString("    if (message.")
 				b.WriteString(field.Name)
-				b.WriteString(" && message.")
-				b.WriteString(field.Name)
-				b.WriteString(".length > 0) {\n")
-				b.WriteString("        writer.uint32(tag(")
-				b.WriteString(fmt.Sprintf("%d", field.Number))
-				b.WriteString(", WIRE.LDELIM)).fork();\n")
+				b.WriteString(") {\n")
+				b.WriteString("        const packedWriter = Writer.create();\n")
 				b.WriteString("        for (const item of message.")
 				b.WriteString(field.Name)
 				b.WriteString(") {\n")
-				b.WriteString("            writer.")
+				b.WriteString("            packedWriter.")
 				b.WriteString(jsWriterMethod(field.Kind))
 				b.WriteString("(item);\n")
 				b.WriteString("        }\n")
-				b.WriteString("        writer.ldelim();\n")
+				b.WriteString("        if (packedWriter.len > 0) {\n")
+				b.WriteString("            writer.uint32(tag(")
+				b.WriteString(fmt.Sprintf("%d", field.Number))
+				b.WriteString(", WIRE.LDELIM)).bytes(packedWriter.finish());\n")
+				b.WriteString("        }\n")
 				b.WriteString("    }\n")
 				continue
 			}
@@ -263,7 +267,7 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 	for _, field := range msg.Fields {
 		b.WriteString("            case ")
 		b.WriteString(fmt.Sprintf("%d", field.Number))
-		b.WriteString(":\n")
+		b.WriteString(": {\n")
 		lines, usesReadInt64, err := jsDecodeField(field, msgIndex, "message")
 		if err != nil {
 			return "", false, err
@@ -273,6 +277,7 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 		}
 		b.WriteString(lines)
 		b.WriteString("                break;\n")
+		b.WriteString("            }\n")
 	}
 	b.WriteString("            default:\n")
 	b.WriteString("                reader.skipType(tag & 7);\n")
