@@ -85,6 +85,19 @@ func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, 
 
 func buildJSTypedef(msg ir.Message, msgIndex map[string]ir.Message) (string, error) {
 	var b strings.Builder
+	if ok, field := jsIsRepeatedWrapper(msg); ok {
+		elemType, err := jsWrapperElemType(field, msgIndex)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString("/**\n")
+		b.WriteString(" * @typedef {")
+		b.WriteString(elemType)
+		b.WriteString("[]} ")
+		b.WriteString(msg.Name)
+		b.WriteString("\n */")
+		return b.String(), nil
+	}
 	b.WriteString("/**\n")
 	b.WriteString(" * @typedef {Object} ")
 	b.WriteString(msg.Name)
@@ -128,6 +141,34 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 	needsReadInt64 := false
 	fmt.Fprintf(&b, "/**\n * @param {%s} message\n * @param {Writer} writer\n */\n", msg.Name)
 	fmt.Fprintf(&b, "export function write%s(message, writer) {\n", msg.Name)
+	if ok, field := jsIsRepeatedWrapper(msg); ok {
+		if field.IsPacked && jsIsPackable(field.Kind) {
+			b.WriteString("    if (message) {\n")
+			b.WriteString("        const packedWriter = Writer.create();\n")
+			b.WriteString("        for (const item of message) {\n")
+			b.WriteString("            packedWriter.")
+			b.WriteString(jsWriterMethod(field.Kind))
+			b.WriteString("(item);\n")
+			b.WriteString("        }\n")
+			b.WriteString("        if (packedWriter.len > 0) {\n")
+			b.WriteString("            writer.uint32(tag(")
+			b.WriteString(fmt.Sprintf("%d", field.Number))
+			b.WriteString(", WIRE.LDELIM)).bytes(packedWriter.finish());\n")
+			b.WriteString("        }\n")
+			b.WriteString("    }\n")
+			return b.String(), needsReadInt64, nil
+		}
+		b.WriteString("    if (message) {\n")
+		b.WriteString("        for (const item of message) {\n")
+		lines, err := jsEncodeField(field, msgIndex, "item", "            ")
+		if err != nil {
+			return "", false, err
+		}
+		b.WriteString(lines)
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
+		return b.String(), needsReadInt64, nil
+	}
 	for _, field := range msg.Fields {
 		fieldName := "message." + field.Name
 		if field.IsMap {
@@ -250,6 +291,32 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 	fmt.Fprintf(&b, "/**\n * @param {Reader} reader\n * @param {number} [length]\n * @returns {%s}\n */\n", msg.Name)
 	fmt.Fprintf(&b, "function decode%sMessage(reader, length) {\n", msg.Name)
 	b.WriteString("    const end = length === undefined ? reader.len : reader.pos + length;\n")
+	if ok, field := jsIsRepeatedWrapper(msg); ok {
+		b.WriteString("    const message = [];\n")
+		b.WriteString("    while (reader.pos < end) {\n")
+		b.WriteString("        const tag = reader.uint32();\n")
+		b.WriteString("        switch (tag >>> 3) {\n")
+		b.WriteString("            case ")
+		b.WriteString(fmt.Sprintf("%d", field.Number))
+		b.WriteString(": {\n")
+		lines, usesReadInt64, err := jsDecodeWrapperField(field, msgIndex)
+		if err != nil {
+			return "", false, err
+		}
+		if usesReadInt64 {
+			needsReadInt64 = true
+		}
+		b.WriteString(lines)
+		b.WriteString("                break;\n")
+		b.WriteString("            }\n")
+		b.WriteString("            default:\n")
+		b.WriteString("                reader.skipType(tag & 7);\n")
+		b.WriteString("        }\n")
+		b.WriteString("    }\n")
+		b.WriteString("    return message;\n")
+		b.WriteString("}\n")
+		return b.String(), needsReadInt64, nil
+	}
 	b.WriteString("    const message = {")
 	for i, field := range msg.Fields {
 		if i > 0 {
@@ -354,13 +421,13 @@ func jsPresenceCheck(field ir.Field, name string) string {
 	}
 	switch field.Kind {
 	case ir.KindString:
-		return name + " !== \"\""
+		return name + " !== undefined && " + name + " !== null && " + name + " !== \"\""
 	case ir.KindBytes:
 		return name + " && " + name + ".length > 0"
 	case ir.KindBool:
-		return name
+		return name + " === true"
 	default:
-		return name + " !== 0"
+		return name + " !== undefined && " + name + " !== null && " + name + " !== 0"
 	}
 }
 
@@ -617,11 +684,11 @@ func jsEncodeMapValue(field ir.Field, msgIndex map[string]ir.Message) (string, e
 func jsMapValuePresence(kind ir.Kind) string {
 	switch kind {
 	case ir.KindString:
-		return "value !== \"\""
+		return "value !== undefined && value !== null && value !== \"\""
 	case ir.KindBool:
-		return "value"
+		return "value === true"
 	default:
-		return "value !== 0"
+		return "value !== undefined && value !== null && value !== 0"
 	}
 }
 
@@ -753,6 +820,44 @@ func jsDecodePackedField(fieldName string, field ir.Field) (string, bool) {
 	}
 	b.WriteString("                }\n")
 	return b.String(), needsReadInt64
+}
+
+func jsIsRepeatedWrapper(msg ir.Message) (bool, ir.Field) {
+	if len(msg.Fields) != 1 {
+		return false, ir.Field{}
+	}
+	field := msg.Fields[0]
+	if field.IsRepeated && !field.IsMap {
+		return true, field
+	}
+	return false, ir.Field{}
+}
+
+func jsWrapperElemType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
+	baseField := ir.Field{
+		Kind:            field.Kind,
+		MessageFullName: field.MessageFullName,
+		EnumFullName:    field.EnumFullName,
+	}
+	return jsBaseType(baseField, msgIndex)
+}
+
+func jsDecodeWrapperField(field ir.Field, msgIndex map[string]ir.Message) (string, bool, error) {
+	if field.Kind == ir.KindMessage {
+		msg, ok := msgIndex[field.MessageFullName]
+		if !ok {
+			return "", false, fmt.Errorf("unknown message type: %s", field.MessageFullName)
+		}
+		return "                message.push(decode" + msg.Name + "Message(reader, reader.uint32()));\n", false, nil
+	}
+	if field.IsPacked && jsIsPackable(field.Kind) {
+		lines, needsReadInt64 := jsDecodePackedField("message", field)
+		return lines, needsReadInt64, nil
+	}
+	if isJSReadInt64(field) {
+		return "                message.push(readInt64(reader, \"" + jsReaderMethod(field.Kind) + "\"));\n", true, nil
+	}
+	return "                message.push(reader." + jsReaderMethod(field.Kind) + "());\n", false, nil
 }
 
 func indexMessages(files []ir.File) map[string]ir.Message {
