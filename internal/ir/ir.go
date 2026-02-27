@@ -23,6 +23,8 @@ type Field struct {
 	IsOptional      bool
 	IsPacked        bool
 	IsMap           bool
+	IsTimestamp     bool
+	TimestampUnit   string
 	MapKeyKind      Kind
 	MapValueKind    Kind
 	MapValueMessage string

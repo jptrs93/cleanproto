@@ -32,3 +32,39 @@ function readInt64(reader, method) {
     return value.toNumber();
 }
 {{- end}}
+{{- if .NeedsTimestamp}}
+function writeTimestamp(value, writer) {
+    if (!(value instanceof Date)) {
+        return;
+    }
+    const ms = value.getTime();
+    const seconds = Math.floor(ms / 1000);
+    const nanos = Math.floor((ms - (seconds * 1000)) * 1e6);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds);
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeTimestampMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return new Date((seconds * 1000) + Math.floor(nanos / 1e6));
+}
+{{- end}}
