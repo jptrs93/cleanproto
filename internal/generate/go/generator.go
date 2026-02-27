@@ -103,15 +103,11 @@ type goDecodeCase struct {
 
 func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, pkg string) (goFileData, error) {
 	data := goFileData{Package: pkg}
-	var usesMath bool
 	var usesTime bool
 	for _, msg := range file.Messages {
-		goMsg, mathNeeded, timeNeeded, err := buildGoMessage(msg, msgIndex)
+		goMsg, _, timeNeeded, err := buildGoMessage(msg, msgIndex)
 		if err != nil {
 			return goFileData{}, err
-		}
-		if mathNeeded {
-			usesMath = true
 		}
 		if timeNeeded {
 			usesTime = true
@@ -120,9 +116,6 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, pkg string) (
 	}
 	imports := []string{
 		"google.golang.org/protobuf/encoding/protowire",
-	}
-	if usesMath {
-		imports = append([]string{"math"}, imports...)
 	}
 	if usesTime {
 		imports = append([]string{"time"}, imports...)
@@ -133,15 +126,11 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, pkg string) (
 
 func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, bool, bool, error) {
 	out := goMessage{Name: msg.Name}
-	var usesMath bool
 	var usesTime bool
 	for _, field := range msg.Fields {
-		goType, mathNeeded, err := goFieldType(field, msgIndex)
+		goType, _, err := goFieldType(field, msgIndex)
 		if err != nil {
 			return goMessage{}, false, false, err
-		}
-		if mathNeeded {
-			usesMath = true
 		}
 		if field.IsTimestamp {
 			usesTime = true
@@ -166,7 +155,7 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, 
 	out.NeedsMsgBytes = needsMsgBytes
 	out.NeedsTmpBytes = needsTmpBytes
 
-	return out, usesMath, usesTime, nil
+	return out, false, usesTime, nil
 }
 
 func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, error) {
@@ -410,95 +399,6 @@ func goAppendHelperName(kind ir.Kind, optional bool) (string, error) {
 	return base, nil
 }
 
-func goDefaultCheck(name string, field ir.Field) string {
-	switch field.Kind {
-	case ir.KindString:
-		return name + " != \"\""
-	case ir.KindBytes:
-		return "len(" + name + ") > 0"
-	case ir.KindBool:
-		return name
-	default:
-		return name + " != 0"
-	}
-}
-
-func goEncodeScalar(name string, field ir.Field) ([]string, error) {
-	switch field.Kind {
-	case ir.KindString:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendBytes(b, []byte(%s))", name),
-		}, nil
-	case ir.KindBytes:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendBytes(b, %s)", name),
-		}, nil
-	case ir.KindBool:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number),
-			fmt.Sprintf("if %s {", name),
-			"b = protowire.AppendVarint(b, 1)",
-			"} else {",
-			"b = protowire.AppendVarint(b, 0)",
-			"}",
-		}, nil
-	case ir.KindFloat:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.Fixed32Type)", field.Number),
-			fmt.Sprintf("b = protowire.AppendFixed32(b, math.Float32bits(%s))", name),
-		}, nil
-	case ir.KindDouble:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.Fixed64Type)", field.Number),
-			fmt.Sprintf("b = protowire.AppendFixed64(b, math.Float64bits(%s))", name),
-		}, nil
-	case ir.KindInt32, ir.KindEnum:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendVarint(b, uint64(uint32(%s)))", name),
-		}, nil
-	case ir.KindUint32:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendVarint(b, uint64(%s))", name),
-		}, nil
-	case ir.KindSint32:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendVarint(b, protowire.EncodeZigZag(int64(%s)))", name),
-		}, nil
-	case ir.KindInt64:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendVarint(b, uint64(%s))", name),
-		}, nil
-	case ir.KindUint64:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendVarint(b, uint64(%s))", name),
-		}, nil
-	case ir.KindSint64:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number),
-			fmt.Sprintf("b = protowire.AppendVarint(b, protowire.EncodeZigZag(%s))", name),
-		}, nil
-	case ir.KindFixed32, ir.KindSfixed32:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.Fixed32Type)", field.Number),
-			fmt.Sprintf("b = protowire.AppendFixed32(b, uint32(%s))", name),
-		}, nil
-	case ir.KindFixed64, ir.KindSfixed64:
-		return []string{
-			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.Fixed64Type)", field.Number),
-			fmt.Sprintf("b = protowire.AppendFixed64(b, uint64(%s))", name),
-		}, nil
-	default:
-		return nil, fmt.Errorf("unsupported encode kind: %v", field.Kind)
-	}
-}
-
 func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
 	var lines []string
 	if field.IsRepeated {
@@ -727,41 +627,6 @@ func goAppendCompactHelperName(kind ir.Kind) (string, error) {
 	}
 }
 
-func goEncodePackedItem(name string, field ir.Field) ([]string, error) {
-	switch field.Kind {
-	case ir.KindBool:
-		return []string{
-			fmt.Sprintf("if %s {", name),
-			"packed = protowire.AppendVarint(packed, 1)",
-			"} else {",
-			"packed = protowire.AppendVarint(packed, 0)",
-			"}",
-		}, nil
-	case ir.KindFloat:
-		return []string{fmt.Sprintf("packed = protowire.AppendFixed32(packed, math.Float32bits(%s))", name)}, nil
-	case ir.KindDouble:
-		return []string{fmt.Sprintf("packed = protowire.AppendFixed64(packed, math.Float64bits(%s))", name)}, nil
-	case ir.KindInt32, ir.KindEnum:
-		return []string{fmt.Sprintf("packed = protowire.AppendVarint(packed, uint64(uint32(%s)))", name)}, nil
-	case ir.KindUint32:
-		return []string{fmt.Sprintf("packed = protowire.AppendVarint(packed, uint64(%s))", name)}, nil
-	case ir.KindSint32:
-		return []string{fmt.Sprintf("packed = protowire.AppendVarint(packed, protowire.EncodeZigZag(int64(%s)))", name)}, nil
-	case ir.KindInt64:
-		return []string{fmt.Sprintf("packed = protowire.AppendVarint(packed, uint64(%s))", name)}, nil
-	case ir.KindUint64:
-		return []string{fmt.Sprintf("packed = protowire.AppendVarint(packed, uint64(%s))", name)}, nil
-	case ir.KindSint64:
-		return []string{fmt.Sprintf("packed = protowire.AppendVarint(packed, protowire.EncodeZigZag(%s))", name)}, nil
-	case ir.KindFixed32, ir.KindSfixed32:
-		return []string{fmt.Sprintf("packed = protowire.AppendFixed32(packed, uint32(%s))", name)}, nil
-	case ir.KindFixed64, ir.KindSfixed64:
-		return []string{fmt.Sprintf("packed = protowire.AppendFixed64(packed, uint64(%s))", name)}, nil
-	default:
-		return nil, fmt.Errorf("unsupported packed kind: %v", field.Kind)
-	}
-}
-
 func goDecodePacked(fieldName string, field ir.Field) ([]string, error) {
 	var lines []string
 	lines = append(lines, "if typ == protowire.BytesType {")
@@ -871,20 +736,6 @@ func goDecodePackedItem(bufName string, field ir.Field) ([]string, error) {
 		return nil, fmt.Errorf("unsupported packed decode kind: %v", field.Kind)
 	}
 	return lines, nil
-}
-
-func prefixLines(lines []string, prefix string) []string {
-	var out []string
-	for _, line := range lines {
-		if strings.HasPrefix(line, "b =") && prefix != "" {
-			out = append(out, strings.Replace(line, "b =", prefix, 1))
-		} else if strings.HasPrefix(line, "packed =") && prefix != "" {
-			out = append(out, strings.Replace(line, "packed =", prefix, 1))
-		} else {
-			out = append(out, line)
-		}
-	}
-	return out
 }
 
 func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDecodeCase, bool, bool, error) {
