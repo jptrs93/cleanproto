@@ -156,6 +156,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			b.WriteString(", WIRE.LDELIM)).bytes(packedWriter.finish());\n")
 			b.WriteString("        }\n")
 			b.WriteString("    }\n")
+			b.WriteString("}\n")
 			return b.String(), needsReadInt64, nil
 		}
 		b.WriteString("    if (message) {\n")
@@ -167,6 +168,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 		b.WriteString(lines)
 		b.WriteString("        }\n")
 		b.WriteString("    }\n")
+		b.WriteString("}\n")
 		return b.String(), needsReadInt64, nil
 	}
 	for _, field := range msg.Fields {
