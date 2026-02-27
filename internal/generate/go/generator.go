@@ -1812,9 +1812,6 @@ type Encodable interface {
 
 func AppendMessageFieldDecorator[T Encodable](num protowire.Number) func([]byte, T) []byte {
 	return func(b []byte, value T) []byte {
-		if value == nil {
-			return b
-		}
 		return AppendBytesField(b, value.Encode(), num)
 	}
 }
