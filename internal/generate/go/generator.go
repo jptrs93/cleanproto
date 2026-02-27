@@ -56,8 +56,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 		if err := tmpl.Execute(&buf, data); err != nil {
 			return nil, err
 		}
-		base := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
-		outPath := filepath.Join(goOut, base+"_cp.pb.go")
+		outPath := filepath.Join(goOut, "model.gen.go")
 		outputs = append(outputs, generate.OutputFile{
 			Path:    outPath,
 			Content: buf.Bytes(),

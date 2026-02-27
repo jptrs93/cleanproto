@@ -41,8 +41,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 		if err := tmpl.Execute(&buf, data); err != nil {
 			return nil, err
 		}
-		base := strings.TrimSuffix(filepath.Base(file.Path), filepath.Ext(file.Path))
-		outPath := filepath.Join(jsOut, base+".js")
+		outPath := filepath.Join(jsOut, "model.js")
 		outputs = append(outputs, generate.OutputFile{
 			Path:    outPath,
 			Content: buf.Bytes(),
