@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"cleanproto/internal/ir"
+	"github.com/jptrs93/cleanproto/internal/ir"
 
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/reflect/protoreflect"

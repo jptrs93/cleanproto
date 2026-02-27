@@ -8,9 +8,9 @@ import (
 	"strings"
 	"text/template"
 
-	"cleanproto/internal/generate"
-	"cleanproto/internal/generate/templates"
-	"cleanproto/internal/ir"
+	"github.com/jptrs93/cleanproto/internal/generate"
+	"github.com/jptrs93/cleanproto/internal/generate/templates"
+	"github.com/jptrs93/cleanproto/internal/ir"
 )
 
 type Generator struct{}

@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"cleanproto/internal/generate"
-	gogen "cleanproto/internal/generate/go"
-	jsg "cleanproto/internal/generate/js"
-	"cleanproto/internal/parser"
+	"github.com/jptrs93/cleanproto/internal/generate"
+	gogen "github.com/jptrs93/cleanproto/internal/generate/go"
+	jsg "github.com/jptrs93/cleanproto/internal/generate/js"
+	"github.com/jptrs93/cleanproto/internal/parser"
 )
 
 type stringList []string

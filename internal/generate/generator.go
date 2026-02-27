@@ -1,6 +1,6 @@
 package generate
 
-import "cleanproto/internal/ir"
+import "github.com/jptrs93/cleanproto/internal/ir"
 
 type OutputFile struct {
 	Path    string
