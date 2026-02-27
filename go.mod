@@ -1,4 +1,4 @@
-module cleanproto
+module github.com/jptrs93/cleanproto
 
 go 1.26.0
 
