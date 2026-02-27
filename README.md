@@ -1,15 +1,17 @@
 # cleanproto
 
-Minimal proto3 generator for Go and JS.
+Clean and minimal proto3 generator for Go and JS.
 
 ## Features
-- Generates Go structs with `Encode()` and `DecodeX` functions.
+- Generates Go structs with `Encode()` and `DecodeMyType` functions.
 - Generates JS encode/decode functions using `protobufjs/minimal`.
-- Supports proto3 only (no `oneof`, no services).
 - Optional fields map to pointers in Go and `undefined` in JS.
 
 ## Install
 ```
+go install github.com/jptrs93/cleanproto/cmd/cleanproto@latest
+
+# or
 go build ./cmd/cleanproto
 ```
 
@@ -25,5 +27,5 @@ cleanproto -proto_path ../protos -go_out ./gen/go -go_pkg api -js_out ./gen/js e
 
 ## Notes
 - Unknown fields are ignored on decode.
+- `oneof` not supported
 - Go output embeds `util.go` sourced from `../jnotes/app/protowireu/protowireu.go` and uses `google.golang.org/protobuf/encoding/protowire`.
-```
