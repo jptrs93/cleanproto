@@ -124,6 +124,8 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		var mapValueKind ir.Kind
 		var mapValueMessage string
 		var mapValueEnum string
+		var isTimestamp bool
+		var timestampUnit string
 		if field.IsMap() {
 			isMap = true
 			keyKind, err := kindFromField(field.MapKey())
@@ -144,8 +146,26 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			}
 		} else if kind == ir.KindMessage {
 			msgName = string(field.Message().FullName())
+			if msgName == "google.protobuf.Timestamp" {
+				isTimestamp = true
+				timestampUnit = "wkt"
+			}
 		} else if kind == ir.KindEnum {
 			enumName = string(field.Enum().FullName())
+		}
+		tsOpt, err := tsFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		if tsOpt != "" {
+			if tsOpt != "seconds" && tsOpt != "milliseconds" {
+				return nil, fmt.Errorf("invalid cleanproto.ts option on %s: %s", field.FullName(), tsOpt)
+			}
+			if kind != ir.KindInt32 && kind != ir.KindInt64 {
+				return nil, fmt.Errorf("cleanproto.ts only supported on int32/int64: %s", field.FullName())
+			}
+			isTimestamp = true
+			timestampUnit = tsOpt
 		}
 		isOptional := field.HasPresence() && !field.IsList() && !field.IsMap() && field.Kind() != protoreflect.MessageKind
 		result = append(result, ir.Field{
@@ -156,6 +176,8 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			IsOptional:      isOptional,
 			IsPacked:        field.IsPacked(),
 			IsMap:           isMap,
+			IsTimestamp:     isTimestamp,
+			TimestampUnit:   timestampUnit,
 			MapKeyKind:      mapKeyKind,
 			MapValueKind:    mapValueKind,
 			MapValueMessage: mapValueMessage,

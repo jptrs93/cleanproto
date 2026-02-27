@@ -22,6 +22,10 @@ extend google.protobuf.FileOptions {
   string go_out = 50000;
   string js_out = 50001;
 }
+
+extend google.protobuf.FieldOptions {
+  string ts = 50010;
+}
 `
 
 var E_JsOut = &protoimpl.ExtensionInfo{
@@ -39,6 +43,15 @@ var E_GoOut = &protoimpl.ExtensionInfo{
 	Field:         50000,
 	Name:          "cleanproto.go_out",
 	Tag:           "bytes,50000,opt,name=go_out",
+	Filename:      optionsProtoPath,
+}
+
+var E_Ts = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*string)(nil),
+	Field:         50010,
+	Name:          "cleanproto.ts",
+	Tag:           "bytes,50010,opt,name=ts",
 	Filename:      optionsProtoPath,
 }
 
@@ -63,6 +76,19 @@ func goOutFromOptions(file protoreflect.FileDescriptor) (string, error) {
 	val := proto.GetExtension(opts, E_GoOut)
 	str, ok := val.(string)
 	if !ok {
+		return "", nil
+	}
+	return str, nil
+}
+
+func tsFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return "", nil
+	}
+	val := proto.GetExtension(opts, E_Ts)
+	str, ok := val.(string)
+	if !ok || str == "" {
 		return "", nil
 	}
 	return str, nil

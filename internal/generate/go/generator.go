@@ -104,13 +104,17 @@ type goDecodeCase struct {
 func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, pkg string) (goFileData, error) {
 	data := goFileData{Package: pkg}
 	var usesMath bool
+	var usesTime bool
 	for _, msg := range file.Messages {
-		goMsg, mathNeeded, err := buildGoMessage(msg, msgIndex)
+		goMsg, mathNeeded, timeNeeded, err := buildGoMessage(msg, msgIndex)
 		if err != nil {
 			return goFileData{}, err
 		}
 		if mathNeeded {
 			usesMath = true
+		}
+		if timeNeeded {
+			usesTime = true
 		}
 		data.Messages = append(data.Messages, goMsg)
 	}
@@ -120,20 +124,27 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, pkg string) (
 	if usesMath {
 		imports = append([]string{"math"}, imports...)
 	}
+	if usesTime {
+		imports = append([]string{"time"}, imports...)
+	}
 	data.Imports = imports
 	return data, nil
 }
 
-func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, bool, error) {
+func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, bool, bool, error) {
 	out := goMessage{Name: msg.Name}
 	var usesMath bool
+	var usesTime bool
 	for _, field := range msg.Fields {
 		goType, mathNeeded, err := goFieldType(field, msgIndex)
 		if err != nil {
-			return goMessage{}, false, err
+			return goMessage{}, false, false, err
 		}
 		if mathNeeded {
 			usesMath = true
+		}
+		if field.IsTimestamp {
+			usesTime = true
 		}
 		out.Fields = append(out.Fields, goField{
 			Name: ir.GoName(field.Name),
@@ -143,22 +154,32 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, 
 
 	encodeLines, err := buildGoEncodeLines(msg, msgIndex)
 	if err != nil {
-		return goMessage{}, false, err
+		return goMessage{}, false, false, err
 	}
 	out.EncodeLines = encodeLines
 
 	decodeCases, needsMsgBytes, needsTmpBytes, err := buildGoDecodeCases(msg, msgIndex)
 	if err != nil {
-		return goMessage{}, false, err
+		return goMessage{}, false, false, err
 	}
 	out.DecodeCases = decodeCases
 	out.NeedsMsgBytes = needsMsgBytes
 	out.NeedsTmpBytes = needsTmpBytes
 
-	return out, usesMath, nil
+	return out, usesMath, usesTime, nil
 }
 
 func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, error) {
+	if field.IsTimestamp {
+		base := "time.Time"
+		if field.IsRepeated {
+			return "[]" + base, false, nil
+		}
+		if field.IsOptional {
+			return "*" + base, false, nil
+		}
+		return base, false, nil
+	}
 	if field.IsMap {
 		keyType, err := goMapKeyType(field.MapKeyKind)
 		if err != nil {
@@ -258,6 +279,12 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message) ([]strin
 	for _, field := range msg.Fields {
 		fieldName := "m." + ir.GoName(field.Name)
 		switch {
+		case field.IsTimestamp:
+			tsLines, err := goEncodeTimestamp(fieldName, field)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, tsLines...)
 		case field.IsMap:
 			mapLines, err := goEncodeMap(fieldName, field, msgIndex)
 			if err != nil {
@@ -404,6 +431,63 @@ func goEncodeScalar(name string, field ir.Field) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("unsupported encode kind: %v", field.Kind)
 	}
+}
+
+func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
+	var lines []string
+	if field.IsRepeated {
+		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
+		lines = append(lines, "if item.IsZero() {", "continue", "}")
+		if field.TimestampUnit == "wkt" {
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+			lines = append(lines, "b = protowire.AppendBytes(b, EncodeTimestamp(item))")
+		} else {
+			valueExpr := goTimestampValue("item", field.TimestampUnit, field.Kind)
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number))
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendVarint(b, %s)", valueExpr))
+		}
+		lines = append(lines, "}")
+		return lines, nil
+	}
+
+	if field.IsOptional {
+		lines = append(lines, fmt.Sprintf("if %s != nil && !%s.IsZero() {", fieldName, fieldName))
+		if field.TimestampUnit == "wkt" {
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendBytes(b, EncodeTimestamp(*%s))", fieldName))
+		} else {
+			valueExpr := goTimestampValue("*"+fieldName, field.TimestampUnit, field.Kind)
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number))
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendVarint(b, %s)", valueExpr))
+		}
+		lines = append(lines, "}")
+		return lines, nil
+	}
+
+	lines = append(lines, fmt.Sprintf("if !%s.IsZero() {", fieldName))
+	if field.TimestampUnit == "wkt" {
+		lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+		lines = append(lines, fmt.Sprintf("b = protowire.AppendBytes(b, EncodeTimestamp(%s))", fieldName))
+	} else {
+		valueExpr := goTimestampValue(fieldName, field.TimestampUnit, field.Kind)
+		lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number))
+		lines = append(lines, fmt.Sprintf("b = protowire.AppendVarint(b, %s)", valueExpr))
+	}
+	lines = append(lines, "}")
+	return lines, nil
+}
+
+func goTimestampValue(name string, unit string, kind ir.Kind) string {
+	var value string
+	if unit == "milliseconds" {
+		value = name + ".UnixMilli()"
+	} else {
+		value = name + ".Unix()"
+	}
+	if kind == ir.KindInt32 {
+		return "uint64(uint32(" + value + "))"
+	}
+	return "uint64(" + value + ")"
 }
 
 func goMapKeyType(kind ir.Kind) (string, error) {
@@ -746,6 +830,15 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 		c := goDecodeCase{Number: field.Number}
 		fieldName := "m." + ir.GoName(field.Name)
 		switch {
+		case field.IsTimestamp:
+			lines, needsMsg, err := goDecodeTimestamp(fieldName, field)
+			if err != nil {
+				return nil, false, false, err
+			}
+			if needsMsg {
+				needsMsgBytes = true
+			}
+			c.Lines = append(c.Lines, lines...)
 		case field.IsMap:
 			lines, msgBytesNeeded, err := goDecodeMap(fieldName, field, msgIndex)
 			if err != nil {
@@ -920,6 +1013,78 @@ func goDecodeScalar(field ir.Field, name string) ([]string, bool, error) {
 	}
 }
 
+func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error) {
+	var lines []string
+	if field.IsRepeated {
+		if field.TimestampUnit == "wkt" {
+			lines = append(lines, "var item time.Time")
+			lines = append(lines, "b, item, err = ConsumeTimestamp(b, typ)")
+			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+			return lines, true, nil
+		}
+		consumeCall, err := goConsumeFunc(ir.Field{Kind: field.Kind})
+		if err != nil {
+			return nil, false, err
+		}
+		if field.IsPacked && isGoPackable(field.Kind) {
+			lines = append(lines, fmt.Sprintf("var raw []%s", goTimestampRawType(field.Kind)))
+			lines = append(lines, fmt.Sprintf("b, raw, err = ConsumeRepeatedCompact(b, typ, %s, %s)", goWireType(field.Kind), consumeCall))
+			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, "for _, v := range raw {")
+			lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goTimestampFromValue("v", field.TimestampUnit)))
+			lines = append(lines, "}")
+			return lines, false, nil
+		}
+		lines = append(lines, fmt.Sprintf("var raw %s", goTimestampRawType(field.Kind)))
+		lines = append(lines, fmt.Sprintf("b, raw, err = ConsumeRepeatedElement(b, typ, %s)", consumeCall))
+		lines = append(lines, "if err != nil {", "return nil, err", "}")
+		lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goTimestampFromValue("raw", field.TimestampUnit)))
+		return lines, false, nil
+	}
+
+	if field.TimestampUnit == "wkt" {
+		lines = append(lines, "var item time.Time")
+		lines = append(lines, "b, item, err = ConsumeTimestamp(b, typ)")
+		lines = append(lines, "if err != nil {", "return nil, err", "}")
+		if field.IsOptional {
+			lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s = item", fieldName))
+		}
+		return lines, true, nil
+	}
+
+	consumeCall, err := goConsumeFunc(ir.Field{Kind: field.Kind})
+	if err != nil {
+		return nil, false, err
+	}
+	lines = append(lines, fmt.Sprintf("var raw %s", goTimestampRawType(field.Kind)))
+	lines = append(lines, fmt.Sprintf("b, raw, err = %s(b, typ)", consumeCall))
+	lines = append(lines, "if err != nil {", "return nil, err", "}")
+	if field.IsOptional {
+		lines = append(lines, fmt.Sprintf("tmp := %s", goTimestampFromValue("raw", field.TimestampUnit)))
+		lines = append(lines, fmt.Sprintf("%s = &tmp", fieldName))
+	} else {
+		lines = append(lines, fmt.Sprintf("%s = %s", fieldName, goTimestampFromValue("raw", field.TimestampUnit)))
+	}
+	return lines, false, nil
+}
+
+func goTimestampRawType(kind ir.Kind) string {
+	if kind == ir.KindInt32 {
+		return "int32"
+	}
+	return "int64"
+}
+
+func goTimestampFromValue(name string, unit string) string {
+	if unit == "milliseconds" {
+		return "time.UnixMilli(int64(" + name + "))"
+	}
+	return "time.Unix(int64(" + name + "), 0)"
+}
+
 func goDecodeOptionalScalar(field ir.Field, fieldName string) ([]string, error) {
 	switch field.Kind {
 	case ir.KindString:
@@ -1040,6 +1205,9 @@ func goConsumeFunc(field ir.Field) (string, error) {
 }
 
 func goConsumeMapValueFunc(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
+	if field.IsTimestamp {
+		return "", fmt.Errorf("timestamp not supported in map values")
+	}
 	switch field.MapValueKind {
 	case ir.KindMessage:
 		msg, ok := msgIndex[field.MapValueMessage]
@@ -1106,11 +1274,78 @@ func loadUtilSource(pkg string) ([]byte, error) {
 	if !strings.HasPrefix(trimmed, "package ") {
 		updated = "package " + pkg + "\n\n" + updated
 	}
+	if strings.Contains(updated, "import (") && !strings.Contains(updated, "\"time\"") {
+		updated = strings.Replace(updated, "import (\n", "import (\n\t\"time\"\n", 1)
+	}
 	updated += "\n\n" + utilExtra
 	return []byte(updated), nil
 }
 
 const utilExtra = `
+func EncodeTimestamp(t time.Time) []byte {
+	if t.IsZero() {
+		return nil
+	}
+	var b []byte
+	seconds := t.Unix()
+	nanos := int32(t.Nanosecond())
+	b = protowire.AppendTag(b, 1, protowire.VarintType)
+	b = protowire.AppendVarint(b, uint64(seconds))
+	if nanos != 0 {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(uint32(nanos)))
+	}
+	return b
+}
+
+func DecodeTimestamp(b []byte) (time.Time, error) {
+	var seconds int64
+	var nanos int32
+	for len(b) > 0 {
+		var num protowire.Number
+		var typ protowire.Type
+		var err error
+		b, num, typ, err = ConsumeTag(b)
+		if err != nil {
+			return time.Time{}, err
+		}
+		switch num {
+		case 1:
+			b, seconds, err = ConsumeVarInt64(b, typ)
+			if err != nil {
+				return time.Time{}, err
+			}
+		case 2:
+			var n int32
+			b, n, err = ConsumeVarInt32(b, typ)
+			if err != nil {
+				return time.Time{}, err
+			}
+			nanos = n
+		default:
+			b, err = SkipFieldValue(b, num, typ)
+			if err != nil {
+				return time.Time{}, err
+			}
+		}
+	}
+	return time.Unix(seconds, int64(nanos)), nil
+}
+
+func ConsumeTimestamp(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
+	var msgBytes []byte
+	var err error
+	b, msgBytes, err = ConsumeMessage(b, typ)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	msg, err := DecodeTimestamp(msgBytes)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return b, msg, nil
+}
+
 func ConsumeMapEntry[K comparable, V any](b []byte, typ protowire.Type, consumeK func([]byte, protowire.Type) ([]byte, K, error), consumeV func([]byte, protowire.Type) ([]byte, V, error)) ([]byte, K, V, error) {
 	var key K
 	var value V
