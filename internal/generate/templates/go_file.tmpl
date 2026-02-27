@@ -46,9 +46,9 @@ func Decode{{.Name}}(b []byte) (*{{.Name}}, error) {
 {{- end}}
         default:
             b, err = SkipFieldValue(b, num, typ)
-            if err != nil {
-                return nil, err
-            }
+        }
+        if err != nil {
+            return nil, err
         }
     }
     return &m, nil

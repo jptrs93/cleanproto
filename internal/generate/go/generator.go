@@ -575,14 +575,10 @@ func goDecodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Messag
 	if err != nil {
 		return nil, false, err
 	}
-	lines = append(lines, fmt.Sprintf("var mapKey %s", mustGoMapKeyType(field.MapKeyKind)))
-	lines = append(lines, fmt.Sprintf("var mapValue %s", mustGoMapValueType(field, msgIndex)))
-	lines = append(lines, fmt.Sprintf("b, mapKey, mapValue, err = ConsumeMapEntry(b, typ, %s, %s)", keyConsume, valConsume))
-	lines = append(lines, "if err != nil {", "return nil, err", "}")
 	lines = append(lines, fmt.Sprintf("if %s == nil {", fieldName))
 	lines = append(lines, fmt.Sprintf("%s = make(map[%s]%s)", fieldName, mustGoMapKeyType(field.MapKeyKind), mustGoMapValueType(field, msgIndex)))
 	lines = append(lines, "}")
-	lines = append(lines, fmt.Sprintf("%s[mapKey] = mapValue", fieldName))
+	lines = append(lines, fmt.Sprintf("b, err = ConsumeMapEntry(b, typ, %s, %s, %s)", fieldName, keyConsume, valConsume))
 	return lines, false, nil
 }
 
@@ -851,13 +847,14 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 		case field.IsRepeated && field.Kind == ir.KindMessage:
 			needsMsgBytes = true
 			msgType := msgIndex[field.MessageFullName].Name
-			c.Lines = append(c.Lines, "var err2 error")
 			c.Lines = append(c.Lines, "b, msgBytes, err = ConsumeMessage(b, typ)")
-			c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
+			c.Lines = append(c.Lines, "if err == nil {")
 			c.Lines = append(c.Lines, fmt.Sprintf("var item *%s", msgType))
-			c.Lines = append(c.Lines, fmt.Sprintf("item, err2 = Decode%s(msgBytes)", msgType))
-			c.Lines = append(c.Lines, "if err2 != nil {", "return nil, err2", "}")
+			c.Lines = append(c.Lines, fmt.Sprintf("item, err = Decode%s(msgBytes)", msgType))
+			c.Lines = append(c.Lines, "if err == nil {")
 			c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+			c.Lines = append(c.Lines, "}")
+			c.Lines = append(c.Lines, "}")
 		case field.IsRepeated:
 			if field.Kind == ir.KindMessage {
 				decodeLines, tmpBytes, err := goDecodeScalar(field, "item")
@@ -877,23 +874,25 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 				if field.IsPacked && isGoPackable(field.Kind) {
 					elemTyp := goWireType(field.Kind)
 					c.Lines = append(c.Lines, fmt.Sprintf("b, %s, err = ConsumeRepeatedCompact(b, typ, %s, %s)", fieldName, elemTyp, consumeCall))
-					c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
 				} else {
 					c.Lines = append(c.Lines, fmt.Sprintf("var item %s", mustGoSliceElemType(field, msgIndex)))
 					c.Lines = append(c.Lines, fmt.Sprintf("b, item, err = ConsumeRepeatedElement(b, typ, %s)", consumeCall))
-					c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
+					c.Lines = append(c.Lines, "if err == nil {")
 					c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+					c.Lines = append(c.Lines, "}")
 				}
 			}
 		case field.Kind == ir.KindMessage:
 			needsMsgBytes = true
 			msgType := msgIndex[field.MessageFullName].Name
 			c.Lines = append(c.Lines, "b, msgBytes, err = ConsumeMessage(b, typ)")
-			c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
+			c.Lines = append(c.Lines, "if err == nil {")
 			c.Lines = append(c.Lines, fmt.Sprintf("var item *%s", msgType))
 			c.Lines = append(c.Lines, fmt.Sprintf("item, err = Decode%s(msgBytes)", msgType))
-			c.Lines = append(c.Lines, "if err != nil {", "return nil, err", "}")
+			c.Lines = append(c.Lines, "if err == nil {")
 			c.Lines = append(c.Lines, fmt.Sprintf("%s = item", fieldName))
+			c.Lines = append(c.Lines, "}")
+			c.Lines = append(c.Lines, "}")
 		case field.IsOptional:
 			decodeLines, err := goDecodeOptionalScalar(field, fieldName)
 			if err != nil {
@@ -934,79 +933,63 @@ func goDecodeScalar(field ir.Field, name string) ([]string, bool, error) {
 	case ir.KindString:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeString(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindBytes:
 		lines := []string{
-			fmt.Sprintf("b, tmpBytes, err = ConsumeBytes(b, typ)"),
-			"if err != nil {", "return nil, err", "}",
-			fmt.Sprintf("%s = append([]byte(nil), tmpBytes...)", name),
+			fmt.Sprintf("b, %s, err = ConsumeBytesCopy(b, typ)", name),
 		}
-		return lines, true, nil
+		return lines, false, nil
 	case ir.KindBool:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeBool(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindFloat:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFloat32(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindDouble:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFloat64(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindInt32, ir.KindEnum:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarInt32(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindSint32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSint32(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindUint32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarUint32(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindInt64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarInt64(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindSint64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSint64(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindUint64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarUint64(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindFixed32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFixedUint32(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindFixed64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFixedUint64(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindSfixed32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSfixed32(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	case ir.KindSfixed64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSfixed64(b, typ)", name),
-			"if err != nil {", "return nil, err", "}",
 		}, false, nil
 	default:
 		return nil, false, fmt.Errorf("unsupported decode kind: %v", field.Kind)
@@ -1019,8 +1002,9 @@ func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error)
 		if field.TimestampUnit == "wkt" {
 			lines = append(lines, "var item time.Time")
 			lines = append(lines, "b, item, err = ConsumeTimestamp(b, typ)")
-			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, "if err == nil {")
 			lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+			lines = append(lines, "}")
 			return lines, true, nil
 		}
 		consumeCall, err := goConsumeFunc(ir.Field{Kind: field.Kind})
@@ -1030,28 +1014,31 @@ func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error)
 		if field.IsPacked && isGoPackable(field.Kind) {
 			lines = append(lines, fmt.Sprintf("var raw []%s", goTimestampRawType(field.Kind)))
 			lines = append(lines, fmt.Sprintf("b, raw, err = ConsumeRepeatedCompact(b, typ, %s, %s)", goWireType(field.Kind), consumeCall))
-			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, "if err == nil {")
 			lines = append(lines, "for _, v := range raw {")
 			lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goTimestampFromValue("v", field.TimestampUnit)))
+			lines = append(lines, "}")
 			lines = append(lines, "}")
 			return lines, false, nil
 		}
 		lines = append(lines, fmt.Sprintf("var raw %s", goTimestampRawType(field.Kind)))
 		lines = append(lines, fmt.Sprintf("b, raw, err = ConsumeRepeatedElement(b, typ, %s)", consumeCall))
-		lines = append(lines, "if err != nil {", "return nil, err", "}")
+		lines = append(lines, "if err == nil {")
 		lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goTimestampFromValue("raw", field.TimestampUnit)))
+		lines = append(lines, "}")
 		return lines, false, nil
 	}
 
 	if field.TimestampUnit == "wkt" {
 		lines = append(lines, "var item time.Time")
 		lines = append(lines, "b, item, err = ConsumeTimestamp(b, typ)")
-		lines = append(lines, "if err != nil {", "return nil, err", "}")
+		lines = append(lines, "if err == nil {")
 		if field.IsOptional {
 			lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
 		} else {
 			lines = append(lines, fmt.Sprintf("%s = item", fieldName))
 		}
+		lines = append(lines, "}")
 		return lines, true, nil
 	}
 
@@ -1061,13 +1048,14 @@ func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error)
 	}
 	lines = append(lines, fmt.Sprintf("var raw %s", goTimestampRawType(field.Kind)))
 	lines = append(lines, fmt.Sprintf("b, raw, err = %s(b, typ)", consumeCall))
-	lines = append(lines, "if err != nil {", "return nil, err", "}")
+	lines = append(lines, "if err == nil {")
 	if field.IsOptional {
 		lines = append(lines, fmt.Sprintf("tmp := %s", goTimestampFromValue("raw", field.TimestampUnit)))
 		lines = append(lines, fmt.Sprintf("%s = &tmp", fieldName))
 	} else {
 		lines = append(lines, fmt.Sprintf("%s = %s", fieldName, goTimestampFromValue("raw", field.TimestampUnit)))
 	}
+	lines = append(lines, "}")
 	return lines, false, nil
 }
 
@@ -1090,77 +1078,62 @@ func goDecodeOptionalScalar(field ir.Field, fieldName string) ([]string, error) 
 	case ir.KindString:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeStringOpt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindBytes:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeBytesOpt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindBool:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeBoolOpt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindFloat:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFloat32Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindDouble:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFloat64Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindInt32, ir.KindEnum:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarInt32Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindSint32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSint32Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindUint32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarUint32Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindInt64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarInt64Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindSint64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSint64Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindUint64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeVarUint64Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindFixed32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFixedUint32Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindFixed64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeFixedUint64Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindSfixed32:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSfixed32Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	case ir.KindSfixed64:
 		return []string{
 			fmt.Sprintf("b, %s, err = ConsumeSfixed64Opt(b, typ)", fieldName),
-			"if err != nil {", "return nil, err", "}",
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported optional decode kind: %v", field.Kind)
@@ -1346,17 +1319,17 @@ func ConsumeTimestamp(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
 	return b, msg, nil
 }
 
-func ConsumeMapEntry[K comparable, V any](b []byte, typ protowire.Type, consumeK func([]byte, protowire.Type) ([]byte, K, error), consumeV func([]byte, protowire.Type) ([]byte, V, error)) ([]byte, K, V, error) {
+func ConsumeMapEntry[K comparable, V any](b []byte, typ protowire.Type, m map[K]V, consumeK func([]byte, protowire.Type) ([]byte, K, error), consumeV func([]byte, protowire.Type) ([]byte, V, error)) ([]byte, error) {
 	var key K
 	var value V
 	if typ != protowire.BytesType {
-		return nil, key, value, errInvalidWireType
+		return nil, errInvalidWireType
 	}
 	var entryBytes []byte
 	var err error
 	b, entryBytes, err = ConsumeMessage(b, typ)
 	if err != nil {
-		return nil, key, value, err
+		return nil, err
 	}
 	for len(entryBytes) > 0 {
 		var num protowire.Number
@@ -1364,27 +1337,28 @@ func ConsumeMapEntry[K comparable, V any](b []byte, typ protowire.Type, consumeK
 		var err2 error
 		entryBytes, num, t, err2 = ConsumeTag(entryBytes)
 		if err2 != nil {
-			return nil, key, value, err2
+			return nil, err2
 		}
 		switch num {
 		case 1:
 			entryBytes, key, err2 = consumeK(entryBytes, t)
 			if err2 != nil {
-				return nil, key, value, err2
+				return nil, err2
 			}
 		case 2:
 			entryBytes, value, err2 = consumeV(entryBytes, t)
 			if err2 != nil {
-				return nil, key, value, err2
+				return nil, err2
 			}
 		default:
 			entryBytes, err2 = SkipFieldValue(entryBytes, num, t)
 			if err2 != nil {
-				return nil, key, value, err2
+				return nil, err2
 			}
 		}
 	}
-	return b, key, value, nil
+	m[key] = value
+	return b, nil
 }
 
 func ConsumeMessageDecorator[T any](decodeFunc func([]byte) (T, error)) func(b []byte, typ protowire.Type) ([]byte, T, error) {
