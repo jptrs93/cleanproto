@@ -305,13 +305,11 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message) ([]strin
 				}
 				lines = append(lines, packedLines...)
 			} else {
-				lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-				encodeLines, err := goEncodeScalar("item", field)
+				repeatedLines, err := goEncodeRepeated(fieldName, field)
 				if err != nil {
 					return nil, err
 				}
-				lines = append(lines, encodeLines...)
-				lines = append(lines, "}")
+				lines = append(lines, repeatedLines...)
 			}
 		case field.Kind == ir.KindMessage:
 			lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
@@ -319,29 +317,97 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message) ([]strin
 			lines = append(lines, fmt.Sprintf("b = protowire.AppendBytes(b, %s.Encode())", fieldName))
 			lines = append(lines, "}")
 		case field.IsOptional:
-			lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
-			encodeLines, err := goEncodeScalar("*"+fieldName, field)
+			encodeLines, err := goEncodeOptionalField(fieldName, field)
 			if err != nil {
 				return nil, err
 			}
 			lines = append(lines, encodeLines...)
-			lines = append(lines, "}")
 		default:
-			cond := goDefaultCheck(fieldName, field)
-			if cond != "" {
-				lines = append(lines, fmt.Sprintf("if %s {", cond))
-			}
-			encodeLines, err := goEncodeScalar(fieldName, field)
+			encodeLines, err := goEncodeField(fieldName, field)
 			if err != nil {
 				return nil, err
 			}
 			lines = append(lines, encodeLines...)
-			if cond != "" {
-				lines = append(lines, "}")
-			}
 		}
 	}
 	return lines, nil
+}
+
+func goEncodeField(name string, field ir.Field) ([]string, error) {
+	helper, err := goAppendHelperName(field.Kind, false)
+	if err != nil {
+		return nil, err
+	}
+	return []string{fmt.Sprintf("b = %s(b, %s, %d)", helper, name, field.Number)}, nil
+}
+
+func goEncodeRepeated(fieldName string, field ir.Field) ([]string, error) {
+	helper, err := goAppendHelperName(field.Kind, false)
+	if err != nil {
+		return nil, err
+	}
+	lines := []string{fmt.Sprintf("b = AppendRepeated(b, %s, AppendFieldDecorator(%s, %d))", fieldName, helper, field.Number)}
+	return lines, nil
+}
+
+func goEncodeOptionalField(name string, field ir.Field) ([]string, error) {
+	if field.Kind == ir.KindBytes {
+		return []string{
+			fmt.Sprintf("if %s != nil {", name),
+			fmt.Sprintf("b = AppendBytesField(b, *%s, %d)", name, field.Number),
+			"}",
+		}, nil
+	}
+	helper, err := goAppendHelperName(field.Kind, true)
+	if err != nil {
+		return nil, err
+	}
+	return []string{fmt.Sprintf("b = %s(b, %s, %d)", helper, name, field.Number)}, nil
+}
+
+func goAppendHelperName(kind ir.Kind, optional bool) (string, error) {
+	var base string
+	switch kind {
+	case ir.KindString:
+		base = "AppendStringField"
+	case ir.KindBytes:
+		base = "AppendBytesField"
+	case ir.KindBool:
+		base = "AppendBoolField"
+	case ir.KindFloat:
+		base = "AppendFloat32Field"
+	case ir.KindDouble:
+		base = "AppendFloat64Field"
+	case ir.KindInt32, ir.KindEnum:
+		base = "AppendInt32Field"
+	case ir.KindSint32:
+		base = "AppendSint32Field"
+	case ir.KindUint32:
+		base = "AppendUint32Field"
+	case ir.KindInt64:
+		base = "AppendInt64Field"
+	case ir.KindSint64:
+		base = "AppendSint64Field"
+	case ir.KindUint64:
+		base = "AppendUint64Field"
+	case ir.KindFixed32:
+		base = "AppendFixed32Field"
+	case ir.KindFixed64:
+		base = "AppendFixed64Field"
+	case ir.KindSfixed32:
+		base = "AppendSfixed32Field"
+	case ir.KindSfixed64:
+		base = "AppendSfixed64Field"
+	default:
+		return "", fmt.Errorf("unsupported append kind: %v", kind)
+	}
+	if optional {
+		if base == "AppendBytesField" {
+			return "", fmt.Errorf("optional bytes append helper not supported")
+		}
+		return base + "Opt", nil
+	}
+	return base, nil
 }
 
 func goDefaultCheck(name string, field ir.Field) string {
@@ -439,12 +505,10 @@ func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
 		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
 		lines = append(lines, "if item.IsZero() {", "continue", "}")
 		if field.TimestampUnit == "wkt" {
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
-			lines = append(lines, "b = protowire.AppendBytes(b, EncodeTimestamp(item))")
+			lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(item), %d)", field.Number))
 		} else {
 			valueExpr := goTimestampValue("item", field.TimestampUnit, field.Kind)
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number))
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendVarint(b, %s)", valueExpr))
+			lines = append(lines, fmt.Sprintf("b = AppendVarIntField(b, %s, %d)", valueExpr, field.Number))
 		}
 		lines = append(lines, "}")
 		return lines, nil
@@ -453,12 +517,10 @@ func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
 	if field.IsOptional {
 		lines = append(lines, fmt.Sprintf("if %s != nil && !%s.IsZero() {", fieldName, fieldName))
 		if field.TimestampUnit == "wkt" {
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendBytes(b, EncodeTimestamp(*%s))", fieldName))
+			lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(*%s), %d)", fieldName, field.Number))
 		} else {
 			valueExpr := goTimestampValue("*"+fieldName, field.TimestampUnit, field.Kind)
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number))
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendVarint(b, %s)", valueExpr))
+			lines = append(lines, fmt.Sprintf("b = AppendVarIntField(b, %s, %d)", valueExpr, field.Number))
 		}
 		lines = append(lines, "}")
 		return lines, nil
@@ -466,12 +528,10 @@ func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
 
 	lines = append(lines, fmt.Sprintf("if !%s.IsZero() {", fieldName))
 	if field.TimestampUnit == "wkt" {
-		lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
-		lines = append(lines, fmt.Sprintf("b = protowire.AppendBytes(b, EncodeTimestamp(%s))", fieldName))
+		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(%s), %d)", fieldName, field.Number))
 	} else {
 		valueExpr := goTimestampValue(fieldName, field.TimestampUnit, field.Kind)
-		lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.VarintType)", field.Number))
-		lines = append(lines, fmt.Sprintf("b = protowire.AppendVarint(b, %s)", valueExpr))
+		lines = append(lines, fmt.Sprintf("b = AppendVarIntField(b, %s, %d)", valueExpr, field.Number))
 	}
 	lines = append(lines, "}")
 	return lines, nil
@@ -526,42 +586,23 @@ func goMapValueType(field ir.Field, msgIndex map[string]ir.Message) (string, boo
 
 func goEncodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Message) ([]string, error) {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("for key, value := range %s {", fieldName))
-	lines = append(lines, "var entry []byte")
-	keyField := ir.Field{Number: 1, Kind: field.MapKeyKind}
-	valField := ir.Field{Number: 2, Kind: field.MapValueKind}
-	keyLines, err := goEncodeScalar("key", keyField)
+	mapValueType := mustGoMapValueType(field, msgIndex)
+	keyHelper, err := goAppendHelperName(field.MapKeyKind, false)
 	if err != nil {
 		return nil, err
 	}
-	lines = append(lines, prefixLines(keyLines, "entry = ")...)
+	keyExpr := fmt.Sprintf("AppendFieldDecorator(%s, 1)", keyHelper)
+	var valueExpr string
 	if field.MapValueKind == ir.KindMessage {
-		lines = append(lines, "if value != nil {")
-		lines = append(lines, fmt.Sprintf("entry = protowire.AppendTag(entry, 2, protowire.BytesType)"))
-		lines = append(lines, fmt.Sprintf("entry = protowire.AppendBytes(entry, value.Encode())"))
-		lines = append(lines, "}")
-	} else if field.MapValueKind == ir.KindBytes {
-		lines = append(lines, fmt.Sprintf("if len(value) > 0 {"))
-		lines = append(lines, fmt.Sprintf("entry = protowire.AppendTag(entry, 2, protowire.BytesType)"))
-		lines = append(lines, fmt.Sprintf("entry = protowire.AppendBytes(entry, value)"))
-		lines = append(lines, "}")
+		valueExpr = fmt.Sprintf("AppendMessageFieldDecorator[%s](2)", mapValueType)
 	} else {
-		valLines, err := goEncodeScalar("value", valField)
+		valHelper, err := goAppendHelperName(field.MapValueKind, false)
 		if err != nil {
 			return nil, err
 		}
-		cond := goDefaultCheck("value", ir.Field{Kind: field.MapValueKind})
-		if cond != "" {
-			lines = append(lines, fmt.Sprintf("if %s {", cond))
-			lines = append(lines, prefixLines(valLines, "entry = ")...)
-			lines = append(lines, "}")
-		} else {
-			lines = append(lines, prefixLines(valLines, "entry = ")...)
-		}
+		valueExpr = fmt.Sprintf("AppendFieldDecorator(%s, 2)", valHelper)
 	}
-	lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
-	lines = append(lines, "b = protowire.AppendBytes(b, entry)")
-	lines = append(lines, "}")
+	lines = append(lines, fmt.Sprintf("b = AppendMap(b, %s, %d, %s, %s)", fieldName, field.Number, keyExpr, valueExpr))
 	return lines, nil
 }
 
@@ -642,20 +683,48 @@ func isGoPackable(kind ir.Kind) bool {
 }
 
 func goEncodePacked(fieldName string, field ir.Field) ([]string, error) {
-	var lines []string
-	lines = append(lines, "var packed []byte")
-	lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-	packedLines, err := goEncodePackedItem("item", field)
+	compactHelper, err := goAppendCompactHelperName(field.Kind)
 	if err != nil {
 		return nil, err
 	}
-	lines = append(lines, packedLines...)
-	lines = append(lines, "}")
-	lines = append(lines, "if len(packed) > 0 {")
-	lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
-	lines = append(lines, "b = protowire.AppendBytes(b, packed)")
-	lines = append(lines, "}")
+	var lines []string
+	lines = append(lines, fmt.Sprintf("b = AppendRepeatedCompact(b, %s, %d, AppendCompactDecorator(%s))", fieldName, field.Number, compactHelper))
 	return lines, nil
+}
+
+func goAppendCompactHelperName(kind ir.Kind) (string, error) {
+	switch kind {
+	case ir.KindBool:
+		return "AppendBoolCompact", nil
+	case ir.KindFloat:
+		return "AppendFloat32Compact", nil
+	case ir.KindDouble:
+		return "AppendFloat64Compact", nil
+	case ir.KindInt32, ir.KindEnum:
+		return "AppendInt32Compact", nil
+	case ir.KindUint32:
+		return "AppendUint32Compact", nil
+	case ir.KindSint32:
+		return "AppendSint32Compact", nil
+	case ir.KindInt64:
+		return "AppendInt64Compact", nil
+	case ir.KindUint64:
+		return "AppendUint64Compact", nil
+	case ir.KindSint64:
+		return "AppendSint64Compact", nil
+	case ir.KindFixed32, ir.KindSfixed32:
+		if kind == ir.KindSfixed32 {
+			return "AppendSfixed32Compact", nil
+		}
+		return "AppendFixed32Compact", nil
+	case ir.KindFixed64, ir.KindSfixed64:
+		if kind == ir.KindSfixed64 {
+			return "AppendSfixed64Compact", nil
+		}
+		return "AppendFixed64Compact", nil
+	default:
+		return "", fmt.Errorf("unsupported packed append kind: %v", kind)
+	}
 }
 
 func goEncodePackedItem(name string, field ir.Field) ([]string, error) {
@@ -1569,5 +1638,369 @@ func ConsumeBytesCopy(b []byte, typ protowire.Type) ([]byte, []byte, error) {
 		return nil, nil, err
 	}
 	return b, append([]byte(nil), v...), nil
+}
+
+func AppendVarIntField(b []byte, v uint64, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, v)
+}
+
+func AppendVarIntFieldOpt(b []byte, v *uint64, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, *v)
+}
+
+func AppendStringField(b []byte, v string, num protowire.Number) []byte {
+	if v == "" {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.BytesType)
+	return protowire.AppendBytes(b, []byte(v))
+}
+
+func AppendStringFieldOpt(b []byte, v *string, num protowire.Number) []byte {
+	if v == nil || *v == "" {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.BytesType)
+	return protowire.AppendBytes(b, []byte(*v))
+}
+
+func AppendBytesField(b []byte, v []byte, num protowire.Number) []byte {
+	if len(v) == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.BytesType)
+	return protowire.AppendBytes(b, v)
+}
+
+func AppendBoolField(b []byte, v bool, num protowire.Number) []byte {
+	if !v {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, 1)
+}
+
+func AppendBoolFieldOpt(b []byte, v *bool, num protowire.Number) []byte {
+	if v == nil || !*v {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, 1)
+}
+
+func AppendFloat32Field(b []byte, v float32, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return protowire.AppendFixed32(b, math.Float32bits(v))
+}
+
+func AppendFloat32FieldOpt(b []byte, v *float32, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return protowire.AppendFixed32(b, math.Float32bits(*v))
+}
+
+func AppendFloat64Field(b []byte, v float64, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return protowire.AppendFixed64(b, math.Float64bits(v))
+}
+
+func AppendFloat64FieldOpt(b []byte, v *float64, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return protowire.AppendFixed64(b, math.Float64bits(*v))
+}
+
+func AppendInt32Field(b []byte, v int32, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, uint64(uint32(v)))
+}
+
+func AppendInt32FieldOpt(b []byte, v *int32, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, uint64(uint32(*v)))
+}
+
+func AppendUint32Field(b []byte, v uint32, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, uint64(v))
+}
+
+func AppendUint32FieldOpt(b []byte, v *uint32, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, uint64(*v))
+}
+
+func AppendSint32Field(b []byte, v int32, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, protowire.EncodeZigZag(int64(v)))
+}
+
+func AppendSint32FieldOpt(b []byte, v *int32, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, protowire.EncodeZigZag(int64(*v)))
+}
+
+func AppendInt64Field(b []byte, v int64, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, uint64(v))
+}
+
+func AppendInt64FieldOpt(b []byte, v *int64, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, uint64(*v))
+}
+
+func AppendUint64Field(b []byte, v uint64, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, v)
+}
+
+func AppendUint64FieldOpt(b []byte, v *uint64, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, *v)
+}
+
+func AppendSint64Field(b []byte, v int64, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, protowire.EncodeZigZag(v))
+}
+
+func AppendSint64FieldOpt(b []byte, v *int64, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return protowire.AppendVarint(b, protowire.EncodeZigZag(*v))
+}
+
+func AppendFixed32Field(b []byte, v uint32, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return protowire.AppendFixed32(b, v)
+}
+
+func AppendFixed32FieldOpt(b []byte, v *uint32, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return protowire.AppendFixed32(b, *v)
+}
+
+func AppendFixed64Field(b []byte, v uint64, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return protowire.AppendFixed64(b, v)
+}
+
+func AppendFixed64FieldOpt(b []byte, v *uint64, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return protowire.AppendFixed64(b, *v)
+}
+
+func AppendSfixed32Field(b []byte, v int32, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return protowire.AppendFixed32(b, uint32(v))
+}
+
+func AppendSfixed32FieldOpt(b []byte, v *int32, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return protowire.AppendFixed32(b, uint32(*v))
+}
+
+func AppendSfixed64Field(b []byte, v int64, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return protowire.AppendFixed64(b, uint64(v))
+}
+
+func AppendSfixed64FieldOpt(b []byte, v *int64, num protowire.Number) []byte {
+	if v == nil || *v == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return protowire.AppendFixed64(b, uint64(*v))
+}
+
+func AppendFieldDecorator[T any](appendField func([]byte, T, protowire.Number) []byte, num protowire.Number) func([]byte, T) []byte {
+	return func(b []byte, value T) []byte {
+		return appendField(b, value, num)
+	}
+}
+
+func AppendCompactDecorator[T any](appendCompact func([]byte, T) []byte) func([]byte, T) []byte {
+	return func(b []byte, value T) []byte {
+		return appendCompact(b, value)
+	}
+}
+
+func AppendBoolCompact(b []byte, v bool) []byte {
+	if v {
+		return protowire.AppendVarint(b, 1)
+	}
+	return protowire.AppendVarint(b, 0)
+}
+
+func AppendFloat32Compact(b []byte, v float32) []byte {
+	return protowire.AppendFixed32(b, math.Float32bits(v))
+}
+
+func AppendFloat64Compact(b []byte, v float64) []byte {
+	return protowire.AppendFixed64(b, math.Float64bits(v))
+}
+
+func AppendInt32Compact(b []byte, v int32) []byte {
+	return protowire.AppendVarint(b, uint64(uint32(v)))
+}
+
+func AppendUint32Compact(b []byte, v uint32) []byte {
+	return protowire.AppendVarint(b, uint64(v))
+}
+
+func AppendSint32Compact(b []byte, v int32) []byte {
+	return protowire.AppendVarint(b, protowire.EncodeZigZag(int64(v)))
+}
+
+func AppendInt64Compact(b []byte, v int64) []byte {
+	return protowire.AppendVarint(b, uint64(v))
+}
+
+func AppendUint64Compact(b []byte, v uint64) []byte {
+	return protowire.AppendVarint(b, v)
+}
+
+func AppendSint64Compact(b []byte, v int64) []byte {
+	return protowire.AppendVarint(b, protowire.EncodeZigZag(v))
+}
+
+func AppendFixed32Compact(b []byte, v uint32) []byte {
+	return protowire.AppendFixed32(b, v)
+}
+
+func AppendSfixed32Compact(b []byte, v int32) []byte {
+	return protowire.AppendFixed32(b, uint32(v))
+}
+
+func AppendFixed64Compact(b []byte, v uint64) []byte {
+	return protowire.AppendFixed64(b, v)
+}
+
+func AppendSfixed64Compact(b []byte, v int64) []byte {
+	return protowire.AppendFixed64(b, uint64(v))
+}
+
+type Encodable interface {
+	Encode() []byte
+}
+
+func AppendMessageFieldDecorator[T Encodable](num protowire.Number) func([]byte, T) []byte {
+	return func(b []byte, value T) []byte {
+		if value == nil {
+			return b
+		}
+		return AppendBytesField(b, value.Encode(), num)
+	}
+}
+
+func AppendRepeated[T any](b []byte, values []T, appendValue func([]byte, T) []byte) []byte {
+	for _, value := range values {
+		b = appendValue(b, value)
+	}
+	return b
+}
+
+func AppendRepeatedCompact[T any](b []byte, values []T, num protowire.Number, appendValue func([]byte, T) []byte) []byte {
+	var packed []byte
+	for _, value := range values {
+		packed = appendValue(packed, value)
+	}
+	if len(packed) == 0 {
+		return b
+	}
+	b = protowire.AppendTag(b, num, protowire.BytesType)
+	return protowire.AppendBytes(b, packed)
+}
+
+func AppendMap[K comparable, V any](
+	b []byte,
+	m map[K]V,
+	num protowire.Number,
+	appendKey func([]byte, K) []byte,
+	appendValue func([]byte, V) []byte,
+) []byte {
+	for key, value := range m {
+		var entry []byte
+		entry = appendKey(entry, key)
+		entry = appendValue(entry, value)
+		b = protowire.AppendTag(b, num, protowire.BytesType)
+		b = protowire.AppendBytes(b, entry)
+	}
+	return b
 }
 `
