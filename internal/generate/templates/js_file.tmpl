@@ -1,0 +1,34 @@
+{{- range .Typedefs}}
+{{.}}
+
+{{- end}}
+import {Reader, Writer} from "protobufjs/minimal";
+
+const WIRE = {
+    VARINT: 0,
+    FIXED64: 1,
+    LDELIM: 2,
+    FIXED32: 5
+};
+
+const tag = (field, wire) => (field << 3) | wire;
+
+{{range .Messages}}
+{{.WriteFunc}}
+
+{{.EncodeFunc}}
+
+{{.DecodeMessageFunc}}
+
+{{.DecodeFunc}}
+
+{{end}}
+{{- if .NeedsReadInt64}}
+function readInt64(reader, method) {
+    const value = reader[method]();
+    if (typeof value === "number") {
+        return value;
+    }
+    return value.toNumber();
+}
+{{- end}}

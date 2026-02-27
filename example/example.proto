@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package example;
+
+message Book {
+  string id = 1;
+  string title = 2;
+}
+
+message Library {
+  map<string, Book> books = 1;
+  map<int32, int64> counts = 2;
+  repeated int32 tags = 3 [packed = true];
+  repeated string names = 4;
+}
