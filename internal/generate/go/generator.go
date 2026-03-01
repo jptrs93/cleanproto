@@ -3,7 +3,6 @@ package gogen
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -1254,12 +1253,7 @@ func indexMessages(files []ir.File) map[string]ir.Message {
 }
 
 func loadUtilSource(pkg string) ([]byte, error) {
-	srcPath := filepath.Clean("../jnotes/app/protowireu/protowireu.go")
-	content, err := os.ReadFile(srcPath)
-	if err != nil {
-		return nil, fmt.Errorf("read protowireu source: %w", err)
-	}
-	updated := strings.Replace(string(content), "package protowireu", "package "+pkg, 1)
+	updated := strings.Replace(templates.ProtowireUSource, "package protowireu", "package "+pkg, 1)
 	trimmed := strings.TrimSpace(updated)
 	if !strings.HasPrefix(trimmed, "package ") {
 		updated = "package " + pkg + "\n\n" + updated
