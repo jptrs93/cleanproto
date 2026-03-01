@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"github.com/jptrs93/cleanproto/internal/generate"
 	"github.com/jptrs93/cleanproto/internal/generate/templates"
@@ -92,8 +93,9 @@ type goMessage struct {
 }
 
 type goField struct {
-	Name string
-	Type string
+	Name    string
+	Type    string
+	JSONTag string
 }
 
 type goDecodeCase struct {
@@ -136,8 +138,9 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, 
 			usesTime = true
 		}
 		out.Fields = append(out.Fields, goField{
-			Name: ir.GoName(field.Name),
-			Type: goType,
+			Name:    ir.GoName(field.Name),
+			Type:    goType,
+			JSONTag: toSnakeCase(field.Name),
 		})
 	}
 
@@ -156,6 +159,26 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, 
 	out.NeedsTmpBytes = needsTmpBytes
 
 	return out, false, usesTime, nil
+}
+
+func toSnakeCase(name string) string {
+	if name == "" {
+		return ""
+	}
+
+	var out strings.Builder
+	out.Grow(len(name) + 4)
+	for i, r := range name {
+		if r == '-' {
+			out.WriteByte('_')
+			continue
+		}
+		if i > 0 && unicode.IsUpper(r) {
+			out.WriteByte('_')
+		}
+		out.WriteRune(unicode.ToLower(r))
+	}
+	return out.String()
 }
 
 func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, error) {

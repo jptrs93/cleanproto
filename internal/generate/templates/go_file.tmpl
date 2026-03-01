@@ -9,7 +9,7 @@ import (
 {{range .Messages}}
 type {{.Name}} struct {
 {{- range .Fields}}
-    {{.Name}} {{.Type}}
+    {{.Name}} {{.Type}} `json:"{{.JSONTag}}"`
 {{- end}}
 }
 
