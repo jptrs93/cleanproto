@@ -110,7 +110,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 	var result []ir.Field
 	for i := 0; i < fields.Len(); i++ {
 		field := fields.Get(i)
-		if field.ContainingOneof() != nil {
+		if oneof := field.ContainingOneof(); oneof != nil && !oneof.IsSynthetic() {
 			return nil, fmt.Errorf("oneof is not supported: %s", field.FullName())
 		}
 		kind, err := kindFromField(field)
