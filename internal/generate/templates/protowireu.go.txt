@@ -1,0 +1,207 @@
+package protowireu
+
+import (
+	"errors"
+	"math"
+
+	"google.golang.org/protobuf/encoding/protowire"
+)
+
+var errInvalidWireType = errors.New("invalid wire type")
+
+func ConsumeTag(b []byte) ([]byte, protowire.Number, protowire.Type, error) {
+	num, typ, n := protowire.ConsumeTag(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, 0, err
+	}
+	return b[n:], num, typ, nil
+}
+
+func SkipFieldValue(b []byte, num protowire.Number, typ protowire.Type) ([]byte, error) {
+	n := protowire.ConsumeFieldValue(num, typ, b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, err
+	}
+	return b[n:], nil
+}
+
+func ConsumeVarInt32(b []byte, typ protowire.Type) ([]byte, int32, error) {
+	if typ != protowire.VarintType {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeVarint(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], int32(v), nil
+}
+
+func ConsumeVarInt64(b []byte, typ protowire.Type) ([]byte, int64, error) {
+	if typ != protowire.VarintType {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeVarint(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], int64(v), nil
+}
+
+func ConsumeVarUint32(b []byte, typ protowire.Type) ([]byte, uint32, error) {
+	if typ != protowire.VarintType {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeVarint(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], uint32(v), nil
+}
+
+func ConsumeVarUint64(b []byte, typ protowire.Type) ([]byte, uint64, error) {
+	if typ != protowire.VarintType {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeVarint(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], v, nil
+}
+
+func ConsumeSint32(b []byte, typ protowire.Type) ([]byte, int32, error) {
+	if typ != protowire.VarintType {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeVarint(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], int32(protowire.DecodeZigZag(v)), nil
+}
+
+func ConsumeSint64(b []byte, typ protowire.Type) ([]byte, int64, error) {
+	if typ != protowire.VarintType {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeVarint(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], int64(protowire.DecodeZigZag(v)), nil
+}
+
+func ConsumeBool(b []byte, typ protowire.Type) ([]byte, bool, error) {
+	if typ != protowire.VarintType {
+		return nil, false, errInvalidWireType
+	}
+	v, n := protowire.ConsumeVarint(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, false, err
+	}
+	return b[n:], v != 0, nil
+}
+
+func ConsumeEnum(b []byte, typ protowire.Type) ([]byte, int32, error) {
+	return ConsumeVarInt32(b, typ)
+}
+
+func ConsumeFixedInt32(b []byte, typ protowire.Type) ([]byte, int32, error) {
+	if typ != protowire.Fixed32Type {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeFixed32(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], int32(v), nil
+}
+
+func ConsumeFixedUint32(b []byte, typ protowire.Type) ([]byte, uint32, error) {
+	if typ != protowire.Fixed32Type {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeFixed32(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], v, nil
+}
+
+func ConsumeFixedInt64(b []byte, typ protowire.Type) ([]byte, int64, error) {
+	if typ != protowire.Fixed64Type {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeFixed64(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], int64(v), nil
+}
+
+func ConsumeFixedUint64(b []byte, typ protowire.Type) ([]byte, uint64, error) {
+	if typ != protowire.Fixed64Type {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeFixed64(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], v, nil
+}
+
+func ConsumeSfixed32(b []byte, typ protowire.Type) ([]byte, int32, error) {
+	return ConsumeFixedInt32(b, typ)
+}
+
+func ConsumeSfixed64(b []byte, typ protowire.Type) ([]byte, int64, error) {
+	return ConsumeFixedInt64(b, typ)
+}
+
+func ConsumeFloat32(b []byte, typ protowire.Type) ([]byte, float32, error) {
+	if typ != protowire.Fixed32Type {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeFixed32(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], math.Float32frombits(v), nil
+}
+
+func ConsumeFloat64(b []byte, typ protowire.Type) ([]byte, float64, error) {
+	if typ != protowire.Fixed64Type {
+		return nil, 0, errInvalidWireType
+	}
+	v, n := protowire.ConsumeFixed64(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, 0, err
+	}
+	return b[n:], math.Float64frombits(v), nil
+}
+
+func ConsumeBytes(b []byte, typ protowire.Type) ([]byte, []byte, error) {
+	if typ != protowire.BytesType {
+		return nil, nil, errInvalidWireType
+	}
+	v, n := protowire.ConsumeBytes(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, nil, err
+	}
+	return b[n:], v, nil
+}
+
+func ConsumeString(b []byte, typ protowire.Type) ([]byte, string, error) {
+	if typ != protowire.BytesType {
+		return nil, "", errInvalidWireType
+	}
+	v, n := protowire.ConsumeBytes(b)
+	if err := protowire.ParseError(n); err != nil {
+		return nil, "", err
+	}
+	return b[n:], string(v), nil
+}
+
+func ConsumeMessage(b []byte, typ protowire.Type) ([]byte, []byte, error) {
+	return ConsumeBytes(b, typ)
+}
