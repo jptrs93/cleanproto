@@ -6,7 +6,19 @@ type File struct {
 	GoPackage string
 	GoOut     string
 	JsOut     string
+	Enums     []Enum
 	Messages  []Message
+}
+
+type Enum struct {
+	Name     string
+	FullName string
+	Values   []EnumValue
+}
+
+type EnumValue struct {
+	Name   string
+	Number int32
 }
 
 type Message struct {

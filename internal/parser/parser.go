@@ -73,6 +73,16 @@ func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
 	if err != nil {
 		return ir.File{}, err
 	}
+	enums, err := collectEnums(file.Enums(), nil)
+	if err != nil {
+		return ir.File{}, err
+	}
+	nestedEnums, err := collectMessageEnums(file.Messages(), nil)
+	if err != nil {
+		return ir.File{}, err
+	}
+	out.Enums = append(out.Enums, enums...)
+	out.Enums = append(out.Enums, nestedEnums...)
 	out.Messages = msgs
 	return out, nil
 }
@@ -98,6 +108,49 @@ func collectMessages(messages protoreflect.MessageDescriptors, prefix []string) 
 		result = append(result, irMsg)
 
 		nested, err := collectMessages(msg.Messages(), nameParts)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, nested...)
+	}
+	return result, nil
+}
+
+func collectEnums(enums protoreflect.EnumDescriptors, prefix []string) ([]ir.Enum, error) {
+	var result []ir.Enum
+	for i := 0; i < enums.Len(); i++ {
+		enum := enums.Get(i)
+		nameParts := append(prefix, string(enum.Name()))
+		irEnum := ir.Enum{
+			Name:     ir.GoName(joinName(nameParts)),
+			FullName: string(enum.FullName()),
+		}
+		for j := 0; j < enum.Values().Len(); j++ {
+			value := enum.Values().Get(j)
+			irEnum.Values = append(irEnum.Values, ir.EnumValue{
+				Name:   string(value.Name()),
+				Number: int32(value.Number()),
+			})
+		}
+		result = append(result, irEnum)
+	}
+	return result, nil
+}
+
+func collectMessageEnums(messages protoreflect.MessageDescriptors, prefix []string) ([]ir.Enum, error) {
+	var result []ir.Enum
+	for i := 0; i < messages.Len(); i++ {
+		msg := messages.Get(i)
+		if msg.IsMapEntry() {
+			continue
+		}
+		nameParts := append(prefix, string(msg.Name()))
+		enums, err := collectEnums(msg.Enums(), nameParts)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, enums...)
+		nested, err := collectMessageEnums(msg.Messages(), nameParts)
 		if err != nil {
 			return nil, err
 		}

@@ -26,6 +26,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	}
 
 	msgIndex := indexMessages(files)
+	enumIndex := indexEnums(files)
 	var outputs []generate.OutputFile
 	var utilPkg string
 	var utilDir string
@@ -48,7 +49,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			utilPkg = pkg
 			utilDir = goOut
 		}
-		data, err := buildGoFileData(file, msgIndex, pkg)
+		data, err := buildGoFileData(file, msgIndex, enumIndex, pkg)
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +80,18 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 type goFileData struct {
 	Package  string
 	Imports  []string
+	Enums    []goEnum
 	Messages []goMessage
+}
+
+type goEnum struct {
+	Name   string
+	Values []goEnumValue
+}
+
+type goEnumValue struct {
+	Name   string
+	Number int32
 }
 
 type goMessage struct {
@@ -102,11 +114,21 @@ type goDecodeCase struct {
 	Lines  []string
 }
 
-func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, pkg string) (goFileData, error) {
+func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, pkg string) (goFileData, error) {
 	data := goFileData{Package: pkg}
+	for _, enum := range file.Enums {
+		goEnum := goEnum{Name: enum.Name}
+		for _, value := range enum.Values {
+			goEnum.Values = append(goEnum.Values, goEnumValue{
+				Name:   enum.Name + "_" + value.Name,
+				Number: value.Number,
+			})
+		}
+		data.Enums = append(data.Enums, goEnum)
+	}
 	var usesTime bool
 	for _, msg := range file.Messages {
-		goMsg, _, timeNeeded, err := buildGoMessage(msg, msgIndex)
+		goMsg, _, timeNeeded, err := buildGoMessage(msg, msgIndex, enumIndex)
 		if err != nil {
 			return goFileData{}, err
 		}
@@ -125,11 +147,11 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, pkg string) (
 	return data, nil
 }
 
-func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, bool, bool, error) {
+func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (goMessage, bool, bool, error) {
 	out := goMessage{Name: msg.Name}
 	var usesTime bool
 	for _, field := range msg.Fields {
-		goType, _, err := goFieldType(field, msgIndex)
+		goType, _, err := goFieldType(field, msgIndex, enumIndex)
 		if err != nil {
 			return goMessage{}, false, false, err
 		}
@@ -146,13 +168,13 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, 
 		})
 	}
 
-	encodeLines, err := buildGoEncodeLines(msg, msgIndex)
+	encodeLines, err := buildGoEncodeLines(msg, msgIndex, enumIndex)
 	if err != nil {
 		return goMessage{}, false, false, err
 	}
 	out.EncodeLines = encodeLines
 
-	decodeCases, needsMsgBytes, needsTmpBytes, err := buildGoDecodeCases(msg, msgIndex)
+	decodeCases, needsMsgBytes, needsTmpBytes, err := buildGoDecodeCases(msg, msgIndex, enumIndex)
 	if err != nil {
 		return goMessage{}, false, false, err
 	}
@@ -183,7 +205,7 @@ func toSnakeCase(name string) string {
 	return out.String()
 }
 
-func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, error) {
+func goFieldType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (string, bool, error) {
 	if field.IsTimestamp {
 		base := "time.Time"
 		if field.IsRepeated {
@@ -209,7 +231,7 @@ func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, 
 		if err != nil {
 			return "", false, err
 		}
-		valueType, mathNeeded, err := goMapValueType(field, msgIndex)
+		valueType, mathNeeded, err := goMapValueType(field, msgIndex, enumIndex)
 		if err != nil {
 			return "", false, err
 		}
@@ -230,6 +252,13 @@ func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, 
 		if err != nil {
 			return "", false, err
 		}
+		if field.Kind == ir.KindEnum {
+			enum, ok := enumIndex[field.EnumFullName]
+			if !ok {
+				return "", false, fmt.Errorf("unknown enum type: %s", field.EnumFullName)
+			}
+			t = enum.Name
+		}
 		return "[]" + t, mathNeeded, nil
 	}
 
@@ -249,6 +278,16 @@ func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, 
 	t, mathNeeded, err := goScalarType(field.Kind, field.IsOptional)
 	if err != nil {
 		return "", false, err
+	}
+	if field.Kind == ir.KindEnum {
+		enum, ok := enumIndex[field.EnumFullName]
+		if !ok {
+			return "", false, fmt.Errorf("unknown enum type: %s", field.EnumFullName)
+		}
+		if field.IsOptional {
+			return "*" + enum.Name, mathNeeded, nil
+		}
+		return enum.Name, mathNeeded, nil
 	}
 	return t, mathNeeded, nil
 }
@@ -298,7 +337,7 @@ func goScalarType(kind ir.Kind, optional bool) (string, bool, error) {
 	return t, needsMath, nil
 }
 
-func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message) ([]string, error) {
+func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) ([]string, error) {
 	var lines []string
 	for _, field := range msg.Fields {
 		fieldName := "m." + ir.GoName(field.Name)
@@ -315,8 +354,11 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message) ([]strin
 				return nil, err
 			}
 			lines = append(lines, durLines...)
+		case field.IsRepeated && field.Kind == ir.KindEnum:
+			enumLines := goEncodeRepeatedEnum(fieldName, field)
+			lines = append(lines, enumLines...)
 		case field.IsMap:
-			mapLines, err := goEncodeMap(fieldName, field, msgIndex)
+			mapLines, err := goEncodeMap(fieldName, field, msgIndex, enumIndex)
 			if err != nil {
 				return nil, err
 			}
@@ -364,6 +406,9 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message) ([]strin
 }
 
 func goEncodeField(name string, field ir.Field) ([]string, error) {
+	if field.Kind == ir.KindEnum {
+		return []string{fmt.Sprintf("b = AppendInt32Field(b, int32(%s), %d)", name, field.Number)}, nil
+	}
 	helper, err := goAppendHelperName(field.Kind, false)
 	if err != nil {
 		return nil, err
@@ -372,6 +417,9 @@ func goEncodeField(name string, field ir.Field) ([]string, error) {
 }
 
 func goEncodeRepeated(fieldName string, field ir.Field) ([]string, error) {
+	if field.Kind == ir.KindEnum {
+		return goEncodeRepeatedEnum(fieldName, field), nil
+	}
 	helper, err := goAppendHelperName(field.Kind, false)
 	if err != nil {
 		return nil, err
@@ -381,6 +429,13 @@ func goEncodeRepeated(fieldName string, field ir.Field) ([]string, error) {
 }
 
 func goEncodeOptionalField(name string, field ir.Field) ([]string, error) {
+	if field.Kind == ir.KindEnum {
+		return []string{
+			fmt.Sprintf("if %s != nil {", name),
+			fmt.Sprintf("b = AppendInt32Field(b, int32(*%s), %d)", name, field.Number),
+			"}",
+		}, nil
+	}
 	if field.Kind == ir.KindBytes {
 		return []string{
 			fmt.Sprintf("if %s != nil {", name),
@@ -393,6 +448,26 @@ func goEncodeOptionalField(name string, field ir.Field) ([]string, error) {
 		return nil, err
 	}
 	return []string{fmt.Sprintf("b = %s(b, %s, %d)", helper, name, field.Number)}, nil
+}
+
+func goEncodeRepeatedEnum(fieldName string, field ir.Field) []string {
+	if field.IsPacked {
+		return []string{
+			"var packed []byte",
+			fmt.Sprintf("for _, item := range %s {", fieldName),
+			"packed = AppendInt32Compact(packed, int32(item))",
+			"}",
+			"if len(packed) > 0 {",
+			fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number),
+			"b = protowire.AppendBytes(b, packed)",
+			"}",
+		}
+	}
+	return []string{
+		fmt.Sprintf("for _, item := range %s {", fieldName),
+		fmt.Sprintf("b = AppendInt32Field(b, int32(item), %d)", field.Number),
+		"}",
+	}
 }
 
 func goAppendHelperName(kind ir.Kind, optional bool) (string, error) {
@@ -533,7 +608,7 @@ func goMapKeyType(kind ir.Kind) (string, error) {
 	}
 }
 
-func goMapValueType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, error) {
+func goMapValueType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (string, bool, error) {
 	switch field.MapValueKind {
 	case ir.KindMessage:
 		msg, ok := msgIndex[field.MapValueMessage]
@@ -543,14 +618,20 @@ func goMapValueType(field ir.Field, msgIndex map[string]ir.Message) (string, boo
 		return "*" + msg.Name, false, nil
 	case ir.KindBytes:
 		return "[]byte", false, nil
+	case ir.KindEnum:
+		enum, ok := enumIndex[field.MapValueEnum]
+		if !ok {
+			return "", false, fmt.Errorf("unknown map value enum: %s", field.MapValueEnum)
+		}
+		return enum.Name, false, nil
 	default:
 		return goScalarType(field.MapValueKind, false)
 	}
 }
 
-func goEncodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Message) ([]string, error) {
+func goEncodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) ([]string, error) {
 	var lines []string
-	mapValueType := mustGoMapValueType(field, msgIndex)
+	mapValueType := mustGoMapValueType(field, msgIndex, enumIndex)
 	keyHelper, err := goAppendHelperName(field.MapKeyKind, false)
 	if err != nil {
 		return nil, err
@@ -559,6 +640,8 @@ func goEncodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Messag
 	var valueExpr string
 	if field.MapValueKind == ir.KindMessage {
 		valueExpr = fmt.Sprintf("AppendMessageFieldDecorator[%s](2)", mapValueType)
+	} else if field.MapValueKind == ir.KindEnum {
+		valueExpr = "func(buf []byte, v " + mapValueType + ") []byte { return AppendInt32Field(buf, int32(v), 2) }"
 	} else {
 		valHelper, err := goAppendHelperName(field.MapValueKind, false)
 		if err != nil {
@@ -570,18 +653,18 @@ func goEncodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Messag
 	return lines, nil
 }
 
-func goDecodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Message) ([]string, bool, error) {
+func goDecodeMap(fieldName string, field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) ([]string, bool, error) {
 	var lines []string
 	keyConsume, err := goConsumeFunc(ir.Field{Kind: field.MapKeyKind})
 	if err != nil {
 		return nil, false, err
 	}
-	valConsume, err := goConsumeMapValueFunc(field, msgIndex)
+	valConsume, err := goConsumeMapValueFunc(field, msgIndex, enumIndex)
 	if err != nil {
 		return nil, false, err
 	}
 	lines = append(lines, fmt.Sprintf("if %s == nil {", fieldName))
-	lines = append(lines, fmt.Sprintf("%s = make(map[%s]%s)", fieldName, mustGoMapKeyType(field.MapKeyKind), mustGoMapValueType(field, msgIndex)))
+	lines = append(lines, fmt.Sprintf("%s = make(map[%s]%s)", fieldName, mustGoMapKeyType(field.MapKeyKind), mustGoMapValueType(field, msgIndex, enumIndex)))
 	lines = append(lines, "}")
 	lines = append(lines, fmt.Sprintf("b, err = ConsumeMapEntry(b, typ, %s, %s, %s)", fieldName, keyConsume, valConsume))
 	return lines, false, nil
@@ -629,8 +712,8 @@ func mustGoMapKeyType(kind ir.Kind) string {
 	return key
 }
 
-func mustGoMapValueType(field ir.Field, msgIndex map[string]ir.Message) string {
-	val, _, err := goMapValueType(field, msgIndex)
+func mustGoMapValueType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) string {
+	val, _, err := goMapValueType(field, msgIndex, enumIndex)
 	if err != nil {
 		panic(err)
 	}
@@ -802,7 +885,7 @@ func goDecodePackedItem(bufName string, field ir.Field) ([]string, error) {
 	return lines, nil
 }
 
-func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDecodeCase, bool, bool, error) {
+func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) ([]goDecodeCase, bool, bool, error) {
 	var cases []goDecodeCase
 	needsMsgBytes := false
 	needsTmpBytes := false
@@ -825,8 +908,14 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 				return nil, false, false, err
 			}
 			c.Lines = append(c.Lines, lines...)
+		case field.IsRepeated && field.Kind == ir.KindEnum:
+			enumType, err := goEnumTypeName(field, enumIndex)
+			if err != nil {
+				return nil, false, false, err
+			}
+			c.Lines = append(c.Lines, goDecodeEnum(fieldName, field, enumType)...)
 		case field.IsMap:
-			lines, msgBytesNeeded, err := goDecodeMap(fieldName, field, msgIndex)
+			lines, msgBytesNeeded, err := goDecodeMap(fieldName, field, msgIndex, enumIndex)
 			if err != nil {
 				return nil, false, false, err
 			}
@@ -884,12 +973,28 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 			c.Lines = append(c.Lines, "}")
 			c.Lines = append(c.Lines, "}")
 		case field.IsOptional:
+			if field.Kind == ir.KindEnum {
+				enumType, err := goEnumTypeName(field, enumIndex)
+				if err != nil {
+					return nil, false, false, err
+				}
+				c.Lines = append(c.Lines, goDecodeEnum(fieldName, field, enumType)...)
+				break
+			}
 			decodeLines, err := goDecodeOptionalScalar(field, fieldName)
 			if err != nil {
 				return nil, false, false, err
 			}
 			c.Lines = append(c.Lines, decodeLines...)
 		default:
+			if field.Kind == ir.KindEnum {
+				enumType, err := goEnumTypeName(field, enumIndex)
+				if err != nil {
+					return nil, false, false, err
+				}
+				c.Lines = append(c.Lines, goDecodeEnum(fieldName, field, enumType)...)
+				break
+			}
 			decodeLines, tmpBytes, err := goDecodeScalar(field, fieldName)
 			if err != nil {
 				return nil, false, false, err
@@ -902,6 +1007,64 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 		cases = append(cases, c)
 	}
 	return cases, needsMsgBytes, needsTmpBytes, nil
+}
+
+func goEnumTypeName(field ir.Field, enumIndex map[string]ir.Enum) (string, error) {
+	enum, ok := enumIndex[field.EnumFullName]
+	if !ok {
+		return "", fmt.Errorf("unknown enum type: %s", field.EnumFullName)
+	}
+	return enum.Name, nil
+}
+
+func goDecodeEnum(fieldName string, field ir.Field, enumType string) []string {
+	if field.IsRepeated {
+		if field.IsPacked {
+			return []string{
+				"if typ == protowire.BytesType {",
+				"var packed []byte",
+				"b, packed, err = ConsumeBytes(b, typ)",
+				"if err != nil {", "return nil, err", "}",
+				"for len(packed) > 0 {",
+				"var raw int32",
+				"packed, raw, err = ConsumeVarInt32(packed, protowire.VarintType)",
+				"if err != nil {", "return nil, err", "}",
+				fmt.Sprintf("%s = append(%s, %s(raw))", fieldName, fieldName, enumType),
+				"}",
+				"} else {",
+				"var raw int32",
+				"b, raw, err = ConsumeVarInt32(b, typ)",
+				"if err == nil {",
+				fmt.Sprintf("%s = append(%s, %s(raw))", fieldName, fieldName, enumType),
+				"}",
+				"}",
+			}
+		}
+		return []string{
+			"var raw int32",
+			"b, raw, err = ConsumeVarInt32(b, typ)",
+			"if err == nil {",
+			fmt.Sprintf("%s = append(%s, %s(raw))", fieldName, fieldName, enumType),
+			"}",
+		}
+	}
+	if field.IsOptional {
+		return []string{
+			"var raw int32",
+			"b, raw, err = ConsumeVarInt32(b, typ)",
+			"if err == nil {",
+			fmt.Sprintf("tmp := %s(raw)", enumType),
+			fmt.Sprintf("%s = &tmp", fieldName),
+			"}",
+		}
+	}
+	return []string{
+		"var raw int32",
+		"b, raw, err = ConsumeVarInt32(b, typ)",
+		"if err == nil {",
+		fmt.Sprintf("%s = %s(raw)", fieldName, enumType),
+		"}",
+	}
 }
 
 func goOptionalVarType(field ir.Field) (string, error) {
@@ -1190,9 +1353,12 @@ func goConsumeFunc(field ir.Field) (string, error) {
 	}
 }
 
-func goConsumeMapValueFunc(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
+func goConsumeMapValueFunc(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (string, error) {
 	if field.IsTimestamp {
 		return "", fmt.Errorf("timestamp not supported in map values")
+	}
+	if field.IsDuration {
+		return "", fmt.Errorf("duration not supported in map values")
 	}
 	switch field.MapValueKind {
 	case ir.KindMessage:
@@ -1201,6 +1367,12 @@ func goConsumeMapValueFunc(field ir.Field, msgIndex map[string]ir.Message) (stri
 			return "", fmt.Errorf("unknown map value message: %s", field.MapValueMessage)
 		}
 		return "ConsumeMessageDecorator(Decode" + msg.Name + ")", nil
+	case ir.KindEnum:
+		enum, ok := enumIndex[field.MapValueEnum]
+		if !ok {
+			return "", fmt.Errorf("unknown map value enum: %s", field.MapValueEnum)
+		}
+		return "func(b []byte, typ protowire.Type) ([]byte, " + enum.Name + ", error) { var raw int32; var err error; b, raw, err = ConsumeVarInt32(b, typ); if err != nil { return nil, 0, err }; return b, " + enum.Name + "(raw), nil }", nil
 	case ir.KindBytes:
 		return "ConsumeBytes", nil
 	default:
@@ -1247,6 +1419,16 @@ func indexMessages(files []ir.File) map[string]ir.Message {
 	for _, file := range files {
 		for _, msg := range file.Messages {
 			index[string(msg.FullName)] = msg
+		}
+	}
+	return index
+}
+
+func indexEnums(files []ir.File) map[string]ir.Enum {
+	index := make(map[string]ir.Enum)
+	for _, file := range files {
+		for _, enum := range file.Enums {
+			index[string(enum.FullName)] = enum
 		}
 	}
 	return index

@@ -6,6 +6,18 @@ import (
 {{- end}}
 )
 
+{{range .Enums}}
+type {{.Name}} int32
+
+const (
+{{- $enumName := .Name}}
+{{- range .Values}}
+    {{.Name}} {{$enumName}} = {{.Number}}
+{{- end}}
+)
+
+{{end}}
+
 {{range .Messages}}
 type {{.Name}} struct {
 {{- range .Fields}}
