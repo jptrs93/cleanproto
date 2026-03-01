@@ -45,7 +45,6 @@ cleanproto \
   -proto_path ../protos \
   -go.out ./gen/go \
   -go.pkg demo \
-  -go.jsontags snake \
   -js.out ./gen/js \
   audit.proto
 ```
@@ -62,11 +61,11 @@ import (
 )
 
 type AuditEvent struct {
-    OccurredAt time.Time     `json:"occurred_at"`
-    Timeout    time.Duration `json:"timeout"`
-    RequestID  uuid.UUID     `json:"request_id"`
-    ActorID    int64         `json:"actor_id"`
-    SyncedAt   time.Time     `json:"synced_at"`
+    OccurredAt time.Time
+    Timeout    time.Duration
+    RequestID  uuid.UUID
+    ActorID    int64
+    SyncedAt   time.Time
 }
 
 func (m *AuditEvent) Encode() []byte {
