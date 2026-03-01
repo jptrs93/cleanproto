@@ -995,7 +995,7 @@ func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error)
 			lines = append(lines, "if err == nil {")
 			lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
 			lines = append(lines, "}")
-			return lines, true, nil
+			return lines, false, nil
 		}
 		consumeCall, err := goConsumeFunc(ir.Field{Kind: field.Kind})
 		if err != nil {
@@ -1029,7 +1029,7 @@ func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error)
 			lines = append(lines, fmt.Sprintf("%s = item", fieldName))
 		}
 		lines = append(lines, "}")
-		return lines, true, nil
+		return lines, false, nil
 	}
 
 	consumeCall, err := goConsumeFunc(ir.Field{Kind: field.Kind})
