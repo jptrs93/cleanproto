@@ -10,6 +10,7 @@ func TestGoNameIDSuffix(t *testing.T) {
 		{in: "id", want: "ID"},
 		{in: "item_id", want: "ItemID"},
 		{in: "command_id", want: "CommandID"},
+		{in: "clientFlipId", want: "ClientFlipID"},
 		{in: "id_value", want: "IdValue"},
 	}
 

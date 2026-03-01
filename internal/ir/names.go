@@ -17,7 +17,11 @@ func GoName(protoName string) string {
 		}
 		parts[i] = title(parts[i])
 	}
-	return strings.Join(parts, "")
+	name := strings.Join(parts, "")
+	if strings.HasSuffix(name, "Id") {
+		return strings.TrimSuffix(name, "Id") + "ID"
+	}
+	return name
 }
 
 func JsName(protoName string) string {
