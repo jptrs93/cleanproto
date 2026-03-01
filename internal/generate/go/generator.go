@@ -137,6 +137,9 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message) (goMessage, 
 		if field.IsTimestamp {
 			usesTime = true
 		}
+		if field.IsDuration {
+			usesTime = true
+		}
 		out.Fields = append(out.Fields, goField{
 			Name:    ir.GoName(field.Name),
 			Type:    goType,
@@ -184,6 +187,16 @@ func toSnakeCase(name string) string {
 func goFieldType(field ir.Field, msgIndex map[string]ir.Message) (string, bool, error) {
 	if field.IsTimestamp {
 		base := "time.Time"
+		if field.IsRepeated {
+			return "[]" + base, false, nil
+		}
+		if field.IsOptional {
+			return "*" + base, false, nil
+		}
+		return base, false, nil
+	}
+	if field.IsDuration {
+		base := "time.Duration"
 		if field.IsRepeated {
 			return "[]" + base, false, nil
 		}
@@ -297,6 +310,12 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message) ([]strin
 				return nil, err
 			}
 			lines = append(lines, tsLines...)
+		case field.IsDuration:
+			durLines, err := goEncodeDuration(fieldName, field)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, durLines...)
 		case field.IsMap:
 			mapLines, err := goEncodeMap(fieldName, field, msgIndex)
 			if err != nil {
@@ -471,6 +490,29 @@ func goTimestampValue(name string, unit string, kind ir.Kind) string {
 		return "uint64(uint32(" + value + "))"
 	}
 	return "uint64(" + value + ")"
+}
+
+func goEncodeDuration(fieldName string, field ir.Field) ([]string, error) {
+	var lines []string
+	if field.IsRepeated {
+		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
+		lines = append(lines, "if item == 0 {", "continue", "}")
+		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeDuration(item), %d)", field.Number))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+
+	if field.IsOptional {
+		lines = append(lines, fmt.Sprintf("if %s != nil && *%s != 0 {", fieldName, fieldName))
+		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeDuration(*%s), %d)", fieldName, field.Number))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+
+	lines = append(lines, fmt.Sprintf("if %s != 0 {", fieldName))
+	lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeDuration(%s), %d)", fieldName, field.Number))
+	lines = append(lines, "}")
+	return lines, nil
 }
 
 func goMapKeyType(kind ir.Kind) (string, error) {
@@ -778,6 +820,12 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message) ([]goDec
 				needsMsgBytes = true
 			}
 			c.Lines = append(c.Lines, lines...)
+		case field.IsDuration:
+			lines, err := goDecodeDuration(fieldName, field)
+			if err != nil {
+				return nil, false, false, err
+			}
+			c.Lines = append(c.Lines, lines...)
 		case field.IsMap:
 			lines, msgBytesNeeded, err := goDecodeMap(fieldName, field, msgIndex)
 			if err != nil {
@@ -1002,6 +1050,29 @@ func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error)
 	return lines, false, nil
 }
 
+func goDecodeDuration(fieldName string, field ir.Field) ([]string, error) {
+	var lines []string
+	if field.IsRepeated {
+		lines = append(lines, "var item time.Duration")
+		lines = append(lines, "b, item, err = ConsumeDuration(b, typ)")
+		lines = append(lines, "if err == nil {")
+		lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+
+	lines = append(lines, "var item time.Duration")
+	lines = append(lines, "b, item, err = ConsumeDuration(b, typ)")
+	lines = append(lines, "if err == nil {")
+	if field.IsOptional {
+		lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
+	} else {
+		lines = append(lines, fmt.Sprintf("%s = item", fieldName))
+	}
+	lines = append(lines, "}")
+	return lines, nil
+}
+
 func goTimestampRawType(kind ir.Kind) string {
 	if kind == ir.KindInt32 {
 		return "int32"
@@ -1152,6 +1223,9 @@ func goWireType(kind ir.Kind) string {
 }
 
 func mustGoSliceElemType(field ir.Field, msgIndex map[string]ir.Message) string {
+	if field.IsDuration {
+		return "time.Duration"
+	}
 	if field.Kind == ir.KindMessage {
 		msg, ok := msgIndex[field.MessageFullName]
 		if !ok {
@@ -1258,6 +1332,70 @@ func ConsumeTimestamp(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
 	msg, err := DecodeTimestamp(msgBytes)
 	if err != nil {
 		return nil, time.Time{}, err
+	}
+	return b, msg, nil
+}
+
+func EncodeDuration(d time.Duration) []byte {
+	if d == 0 {
+		return nil
+	}
+	var b []byte
+	seconds := int64(d / time.Second)
+	nanos := int32(d % time.Second)
+	b = protowire.AppendTag(b, 1, protowire.VarintType)
+	b = protowire.AppendVarint(b, uint64(seconds))
+	if nanos != 0 {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(uint32(nanos)))
+	}
+	return b
+}
+
+func DecodeDuration(b []byte) (time.Duration, error) {
+	var seconds int64
+	var nanos int32
+	for len(b) > 0 {
+		var num protowire.Number
+		var typ protowire.Type
+		var err error
+		b, num, typ, err = ConsumeTag(b)
+		if err != nil {
+			return 0, err
+		}
+		switch num {
+		case 1:
+			b, seconds, err = ConsumeVarInt64(b, typ)
+			if err != nil {
+				return 0, err
+			}
+		case 2:
+			var n int32
+			b, n, err = ConsumeVarInt32(b, typ)
+			if err != nil {
+				return 0, err
+			}
+			nanos = n
+		default:
+			b, err = SkipFieldValue(b, num, typ)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+	return time.Duration(seconds)*time.Second + time.Duration(nanos), nil
+}
+
+func ConsumeDuration(b []byte, typ protowire.Type) ([]byte, time.Duration, error) {
+	var msgBytes []byte
+	var err error
+	b, msgBytes, err = ConsumeMessage(b, typ)
+	if err != nil {
+		return nil, 0, err
+	}
+	msg, err := DecodeDuration(msgBytes)
+	if err != nil {
+		return nil, 0, err
 	}
 	return b, msg, nil
 }

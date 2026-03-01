@@ -125,6 +125,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		var mapValueMessage string
 		var mapValueEnum string
 		var isTimestamp bool
+		var isDuration bool
 		var timestampUnit string
 		if field.IsMap() {
 			isMap = true
@@ -149,6 +150,9 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			if msgName == "google.protobuf.Timestamp" {
 				isTimestamp = true
 				timestampUnit = "wkt"
+			}
+			if msgName == "google.protobuf.Duration" {
+				isDuration = true
 			}
 		} else if kind == ir.KindEnum {
 			enumName = string(field.Enum().FullName())
@@ -177,6 +181,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			IsPacked:        field.IsPacked(),
 			IsMap:           isMap,
 			IsTimestamp:     isTimestamp,
+			IsDuration:      isDuration,
 			TimestampUnit:   timestampUnit,
 			MapKeyKind:      mapKeyKind,
 			MapValueKind:    mapValueKind,

@@ -24,6 +24,7 @@ type Field struct {
 	IsPacked        bool
 	IsMap           bool
 	IsTimestamp     bool
+	IsDuration      bool
 	TimestampUnit   string
 	MapKeyKind      Kind
 	MapValueKind    Kind

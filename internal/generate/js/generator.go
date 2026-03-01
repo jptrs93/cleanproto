@@ -55,6 +55,7 @@ type jsFileData struct {
 	Messages       []jsMessage
 	NeedsReadInt64 bool
 	NeedsTimestamp bool
+	NeedsDuration  bool
 }
 
 type jsMessage struct {
@@ -63,6 +64,7 @@ type jsMessage struct {
 	DecodeMessageFunc string
 	DecodeFunc        string
 	NeedsTimestamp    bool
+	NeedsDuration     bool
 }
 
 func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, error) {
@@ -82,6 +84,9 @@ func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, 
 		}
 		if jsMsg.NeedsTimestamp {
 			data.NeedsTimestamp = true
+		}
+		if jsMsg.NeedsDuration {
+			data.NeedsDuration = true
 		}
 		data.Messages = append(data.Messages, jsMsg)
 	}
@@ -123,12 +128,12 @@ func buildJSTypedef(msg ir.Message, msgIndex map[string]ir.Message) (string, err
 }
 
 func buildJSMessage(msg ir.Message, msgIndex map[string]ir.Message) (jsMessage, bool, error) {
-	writeFunc, needsReadInt64, needsTimestampWrite, err := buildWriteFunc(msg, msgIndex)
+	writeFunc, needsReadInt64, needsTimestampWrite, needsDurationWrite, err := buildWriteFunc(msg, msgIndex)
 	if err != nil {
 		return jsMessage{}, false, err
 	}
 	encodeFunc := buildEncodeFunc(msg)
-	decodeMessageFunc, needsReadInt64Decode, needsTimestampDecode, err := buildDecodeMessageFunc(msg, msgIndex)
+	decodeMessageFunc, needsReadInt64Decode, needsTimestampDecode, needsDurationDecode, err := buildDecodeMessageFunc(msg, msgIndex)
 	if err != nil {
 		return jsMessage{}, false, err
 	}
@@ -139,13 +144,15 @@ func buildJSMessage(msg ir.Message, msgIndex map[string]ir.Message) (jsMessage, 
 		DecodeMessageFunc: decodeMessageFunc,
 		DecodeFunc:        decodeFunc,
 		NeedsTimestamp:    needsTimestampWrite || needsTimestampDecode,
+		NeedsDuration:     needsDurationWrite || needsDurationDecode,
 	}, needsReadInt64 || needsReadInt64Decode, nil
 }
 
-func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, bool, bool, error) {
+func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, bool, bool, bool, error) {
 	var b strings.Builder
 	needsReadInt64 := false
 	needsTimestamp := false
+	needsDuration := false
 	fmt.Fprintf(&b, "/**\n * @param {%s} message\n * @param {Writer} writer\n */\n", msg.Name)
 	fmt.Fprintf(&b, "export function write%s(message, writer) {\n", msg.Name)
 	if ok, field := jsIsRepeatedWrapper(msg); ok {
@@ -164,27 +171,33 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			b.WriteString("        }\n")
 			b.WriteString("    }\n")
 			b.WriteString("}\n")
-			return b.String(), needsReadInt64, field.IsTimestamp, nil
+			return b.String(), needsReadInt64, field.IsTimestamp, field.IsDuration, nil
 		}
 		b.WriteString("    if (message) {\n")
 		b.WriteString("        for (const item of message) {\n")
 		lines, err := jsEncodeField(field, msgIndex, "item", "            ")
 		if err != nil {
-			return "", false, false, err
+			return "", false, false, false, err
 		}
 		if field.IsTimestamp {
 			needsTimestamp = true
+		}
+		if field.IsDuration {
+			needsDuration = true
 		}
 		b.WriteString(lines)
 		b.WriteString("        }\n")
 		b.WriteString("    }\n")
 		b.WriteString("}\n")
-		return b.String(), needsReadInt64, needsTimestamp, nil
+		return b.String(), needsReadInt64, needsTimestamp, needsDuration, nil
 	}
 	for _, field := range msg.Fields {
 		fieldName := "message." + field.Name
 		if field.IsTimestamp {
 			needsTimestamp = true
+		}
+		if field.IsDuration {
+			needsDuration = true
 		}
 		if field.IsMap {
 			b.WriteString("    if (message.")
@@ -208,7 +221,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			b.WriteString("(key);\n")
 			mapValueLines, err := jsEncodeMapValue(field, msgIndex)
 			if err != nil {
-				return "", false, false, err
+				return "", false, false, false, err
 			}
 			b.WriteString(mapValueLines)
 			b.WriteString("            writer.ldelim();\n")
@@ -247,7 +260,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			b.WriteString(") {\n")
 			lines, err := jsEncodeField(field, msgIndex, "item", "            ")
 			if err != nil {
-				return "", false, false, err
+				return "", false, false, false, err
 			}
 			b.WriteString(lines)
 			b.WriteString("        }\n")
@@ -262,7 +275,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 		}
 		lines, err := jsEncodeField(field, msgIndex, fieldName, "        ")
 		if err != nil {
-			return "", false, false, err
+			return "", false, false, false, err
 		}
 		b.WriteString(lines)
 		if cond != "" {
@@ -276,7 +289,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			break
 		}
 	}
-	return b.String(), needsReadInt64, needsTimestamp, nil
+	return b.String(), needsReadInt64, needsTimestamp, needsDuration, nil
 }
 
 func buildEncodeFunc(msg ir.Message) string {
@@ -300,10 +313,11 @@ func buildDecodeFunc(msg ir.Message) string {
 	return b.String()
 }
 
-func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, bool, bool, error) {
+func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, bool, bool, bool, error) {
 	var b strings.Builder
 	needsReadInt64 := false
 	needsTimestamp := false
+	needsDuration := false
 	fmt.Fprintf(&b, "/**\n * @param {Reader} reader\n * @param {number} [length]\n * @returns {%s}\n */\n", msg.Name)
 	fmt.Fprintf(&b, "function decode%sMessage(reader, length) {\n", msg.Name)
 	b.WriteString("    const end = length === undefined ? reader.len : reader.pos + length;\n")
@@ -317,13 +331,16 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 		b.WriteString(": {\n")
 		lines, usesReadInt64, usesTimestamp, err := jsDecodeWrapperField(field, msgIndex)
 		if err != nil {
-			return "", false, false, err
+			return "", false, false, false, err
 		}
 		if usesReadInt64 {
 			needsReadInt64 = true
 		}
 		if usesTimestamp {
 			needsTimestamp = true
+		}
+		if field.IsDuration {
+			needsDuration = true
 		}
 		b.WriteString(lines)
 		b.WriteString("                break;\n")
@@ -334,7 +351,7 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 		b.WriteString("    }\n")
 		b.WriteString("    return message;\n")
 		b.WriteString("}\n")
-		return b.String(), needsReadInt64, needsTimestamp, nil
+		return b.String(), needsReadInt64, needsTimestamp, needsDuration, nil
 	}
 	b.WriteString("    const message = {")
 	for i, field := range msg.Fields {
@@ -355,13 +372,16 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 		b.WriteString(": {\n")
 		lines, usesReadInt64, usesTimestamp, err := jsDecodeField(field, msgIndex, "message")
 		if err != nil {
-			return "", false, false, err
+			return "", false, false, false, err
 		}
 		if usesReadInt64 {
 			needsReadInt64 = true
 		}
 		if usesTimestamp {
 			needsTimestamp = true
+		}
+		if field.IsDuration {
+			needsDuration = true
 		}
 		b.WriteString(lines)
 		b.WriteString("                break;\n")
@@ -373,7 +393,7 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 	b.WriteString("    }\n")
 	b.WriteString("    return message;\n")
 	b.WriteString("}\n")
-	return b.String(), needsReadInt64, needsTimestamp, nil
+	return b.String(), needsReadInt64, needsTimestamp, needsDuration, nil
 }
 
 func jsDocType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
@@ -407,6 +427,12 @@ func jsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
 		}
 		return "new Date(0)"
 	}
+	if field.IsDuration {
+		if field.IsOptional {
+			return "undefined"
+		}
+		return "0"
+	}
 	if field.IsOptional {
 		return "undefined"
 	}
@@ -427,6 +453,9 @@ func jsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
 func jsBaseType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
 	if field.IsTimestamp {
 		return "Date", nil
+	}
+	if field.IsDuration {
+		return "number", nil
 	}
 	switch field.Kind {
 	case ir.KindString:
@@ -452,6 +481,9 @@ func jsPresenceCheck(field ir.Field, name string) string {
 	}
 	if field.IsTimestamp {
 		return name + " instanceof Date"
+	}
+	if field.IsDuration {
+		return name + " !== undefined && " + name + " !== null && " + name + " !== 0"
 	}
 	switch field.Kind {
 	case ir.KindString:
@@ -483,6 +515,12 @@ func jsEncodeField(field ir.Field, msgIndex map[string]ir.Message, name, indent 
 		fmt.Fprintf(&b, "%swriter.uint32(tag(%d, %s)).%s(value);\n", indent, field.Number, jsWireType(field.Kind), jsWriterMethod(field.Kind))
 		return b.String(), nil
 	}
+	if field.IsDuration {
+		fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.LDELIM)).fork();\n", indent, field.Number)
+		fmt.Fprintf(&b, "%swriteDuration(%s, writer);\n", indent, name)
+		fmt.Fprintf(&b, "%swriter.ldelim();\n", indent)
+		return b.String(), nil
+	}
 	wire := jsWireType(field.Kind)
 	if field.Kind == ir.KindMessage {
 		msg, ok := msgIndex[field.MessageFullName]
@@ -511,6 +549,16 @@ func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string
 		return b.String(), needsReadInt64, false, nil
 	}
 	if field.IsRepeated {
+		if field.IsTimestamp {
+			lines, needsReadInt64 := jsDecodeTimestampRepeated(fieldName, field)
+			b.WriteString(lines)
+			return b.String(), needsReadInt64, true, nil
+		}
+		if field.IsDuration {
+			lines, needsReadInt64 := jsDecodeDurationRepeated(fieldName)
+			b.WriteString(lines)
+			return b.String(), needsReadInt64, false, nil
+		}
 		if field.Kind == ir.KindMessage {
 			msg, ok := msgIndex[field.MessageFullName]
 			if !ok {
@@ -518,11 +566,6 @@ func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string
 			}
 			fmt.Fprintf(&b, "                %s.push(decode%sMessage(reader, reader.uint32()));\n", fieldName, msg.Name)
 			return b.String(), false, false, nil
-		}
-		if field.IsTimestamp {
-			lines, needsReadInt64 := jsDecodeTimestampRepeated(fieldName, field)
-			b.WriteString(lines)
-			return b.String(), needsReadInt64, true, nil
 		}
 		if field.IsPacked && jsIsPackable(field.Kind) {
 			packedLines, needsReadInt64 := jsDecodePackedField(fieldName, field)
@@ -540,6 +583,11 @@ func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string
 		lines, needsReadInt64 := jsDecodeTimestampSingle(fieldName, field)
 		b.WriteString(lines)
 		return b.String(), needsReadInt64, true, nil
+	}
+	if field.IsDuration {
+		lines, needsReadInt64 := jsDecodeDurationSingle(fieldName)
+		b.WriteString(lines)
+		return b.String(), needsReadInt64, false, nil
 	}
 
 	if field.Kind == ir.KindMessage {
@@ -969,6 +1017,26 @@ func jsDecodeTimestampWrapper(field ir.Field) (string, bool) {
 	return jsDecodeTimestampRepeated("message", field)
 }
 
+func jsDecodeDurationSingle(fieldName string) (string, bool) {
+	var b strings.Builder
+	b.WriteString("                ")
+	b.WriteString(fieldName)
+	b.WriteString(" = decodeDurationMessage(reader, reader.uint32());\n")
+	return b.String(), true
+}
+
+func jsDecodeDurationRepeated(fieldName string) (string, bool) {
+	var b strings.Builder
+	b.WriteString("                ")
+	b.WriteString(fieldName)
+	b.WriteString(".push(decodeDurationMessage(reader, reader.uint32()));\n")
+	return b.String(), true
+}
+
+func jsDecodeDurationWrapper() (string, bool) {
+	return jsDecodeDurationRepeated("message")
+}
+
 func jsIsRepeatedWrapper(msg ir.Message) (bool, ir.Field) {
 	if len(msg.Fields) != 1 {
 		return false, ir.Field{}
@@ -990,16 +1058,20 @@ func jsWrapperElemType(field ir.Field, msgIndex map[string]ir.Message) (string, 
 }
 
 func jsDecodeWrapperField(field ir.Field, msgIndex map[string]ir.Message) (string, bool, bool, error) {
+	if field.IsTimestamp {
+		lines, needsReadInt64 := jsDecodeTimestampWrapper(field)
+		return lines, needsReadInt64, true, nil
+	}
+	if field.IsDuration {
+		lines, needsReadInt64 := jsDecodeDurationWrapper()
+		return lines, needsReadInt64, false, nil
+	}
 	if field.Kind == ir.KindMessage {
 		msg, ok := msgIndex[field.MessageFullName]
 		if !ok {
 			return "", false, false, fmt.Errorf("unknown message type: %s", field.MessageFullName)
 		}
 		return "                message.push(decode" + msg.Name + "Message(reader, reader.uint32()));\n", false, false, nil
-	}
-	if field.IsTimestamp {
-		lines, needsReadInt64 := jsDecodeTimestampWrapper(field)
-		return lines, needsReadInt64, true, nil
 	}
 	if field.IsPacked && jsIsPackable(field.Kind) {
 		lines, needsReadInt64 := jsDecodePackedField("message", field)

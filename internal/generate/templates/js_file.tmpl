@@ -68,3 +68,39 @@ function decodeTimestampMessage(reader, length) {
     return new Date((seconds * 1000) + Math.floor(nanos / 1e6));
 }
 {{- end}}
+{{- if .NeedsDuration}}
+function writeDuration(value, writer) {
+    if (value === undefined || value === null || value === 0) {
+        return;
+    }
+    const totalNanos = Math.trunc(value * 1e6);
+    const seconds = Math.trunc(totalNanos / 1e9);
+    const nanos = totalNanos - (seconds * 1e9);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds);
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeDurationMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000) + (nanos / 1e6);
+}
+{{- end}}
