@@ -51,11 +51,14 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 }
 
 type jsFileData struct {
-	Typedefs       []string
-	Messages       []jsMessage
-	NeedsReadInt64 bool
-	NeedsTimestamp bool
-	NeedsDuration  bool
+	Typedefs             []string
+	Messages             []jsMessage
+	NeedsReadInt64       bool
+	NeedsReadInt64BigInt bool
+	NeedsTimestamp       bool
+	NeedsDuration        bool
+	NeedsTimestampNative bool
+	NeedsDurationBigInt  bool
 }
 
 type jsMessage struct {
@@ -87,6 +90,17 @@ func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, 
 		}
 		if jsMsg.NeedsDuration {
 			data.NeedsDuration = true
+		}
+		for _, field := range msg.Fields {
+			if field.JSType == "bigint" && (field.Kind == ir.KindInt64 || field.IsTimestamp || field.IsDuration) {
+				data.NeedsReadInt64BigInt = true
+			}
+			if field.JSType != "" && field.IsTimestamp {
+				data.NeedsTimestampNative = true
+			}
+			if field.JSType == "bigint" && field.IsDuration {
+				data.NeedsDurationBigInt = true
+			}
 		}
 		data.Messages = append(data.Messages, jsMsg)
 	}
@@ -421,6 +435,18 @@ func jsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
 	if field.IsRepeated {
 		return "[]"
 	}
+	if field.JSType == "bigint" {
+		if field.IsOptional {
+			return "undefined"
+		}
+		return "0n"
+	}
+	if field.JSType == "number" {
+		if field.IsOptional {
+			return "undefined"
+		}
+		return "0"
+	}
 	if field.IsTimestamp {
 		if field.IsOptional {
 			return "undefined"
@@ -451,6 +477,9 @@ func jsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
 }
 
 func jsBaseType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
+	if field.JSType != "" {
+		return field.JSType, nil
+	}
 	if field.IsTimestamp {
 		return "Date", nil
 	}
@@ -476,7 +505,16 @@ func jsBaseType(field ir.Field, msgIndex map[string]ir.Message) (string, error) 
 }
 
 func jsPresenceCheck(field ir.Field, name string) string {
-	if field.IsOptional || field.Kind == ir.KindMessage {
+	if field.IsOptional {
+		return name + " !== undefined && " + name + " !== null"
+	}
+	if field.JSType == "bigint" {
+		return name + " !== undefined && " + name + " !== null && " + name + " !== 0n"
+	}
+	if field.JSType == "number" {
+		return name + " !== undefined && " + name + " !== null && " + name + " !== 0"
+	}
+	if field.Kind == ir.KindMessage {
 		return name + " !== undefined && " + name + " !== null"
 	}
 	if field.IsTimestamp {
@@ -499,20 +537,18 @@ func jsPresenceCheck(field ir.Field, name string) string {
 
 func jsEncodeField(field ir.Field, msgIndex map[string]ir.Message, name, indent string) (string, error) {
 	var b strings.Builder
+	if field.JSType != "" {
+		lines, err := jsEncodeNativeField(field, name, indent)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(lines)
+		return b.String(), nil
+	}
 	if field.IsTimestamp {
-		if field.TimestampUnit == "wkt" {
-			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.LDELIM)).fork();\n", indent, field.Number)
-			fmt.Fprintf(&b, "%swriteTimestamp(%s, writer);\n", indent, name)
-			fmt.Fprintf(&b, "%swriter.ldelim();\n", indent)
-			return b.String(), nil
-		}
-		fmt.Fprintf(&b, "%sconst ts = %s instanceof Date ? %s.getTime() : %s;\n", indent, name, name, name)
-		if field.TimestampUnit == "seconds" {
-			fmt.Fprintf(&b, "%sconst value = Math.floor(ts / 1000);\n", indent)
-		} else {
-			fmt.Fprintf(&b, "%sconst value = Math.floor(ts);\n", indent)
-		}
-		fmt.Fprintf(&b, "%swriter.uint32(tag(%d, %s)).%s(value);\n", indent, field.Number, jsWireType(field.Kind), jsWriterMethod(field.Kind))
+		fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.LDELIM)).fork();\n", indent, field.Number)
+		fmt.Fprintf(&b, "%swriteTimestamp(%s, writer);\n", indent, name)
+		fmt.Fprintf(&b, "%swriter.ldelim();\n", indent)
 		return b.String(), nil
 	}
 	if field.IsDuration {
@@ -540,6 +576,14 @@ func jsEncodeField(field ir.Field, msgIndex map[string]ir.Message, name, indent 
 func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string) (string, bool, bool, error) {
 	var b strings.Builder
 	fieldName := target + "." + field.Name
+	if field.JSType != "" {
+		lines, needsReadInt64, err := jsDecodeNativeField(field, fieldName)
+		if err != nil {
+			return "", false, false, err
+		}
+		b.WriteString(lines)
+		return b.String(), needsReadInt64, false, nil
+	}
 	if field.IsMap {
 		mapLines, needsReadInt64, err := jsDecodeMapField(fieldName, field, msgIndex)
 		if err != nil {
@@ -604,6 +648,156 @@ func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string
 	}
 	fmt.Fprintf(&b, "                %s = reader.%s();\n", fieldName, jsReaderMethod(field.Kind))
 	return b.String(), false, false, nil
+}
+
+func jsEncodeNativeField(field ir.Field, name, indent string) (string, error) {
+	var b strings.Builder
+	switch field.JSType {
+	case "number":
+		if field.IsTimestamp {
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.LDELIM)).fork();\n", indent, field.Number)
+			fmt.Fprintf(&b, "%swriteTimestampFromMillis(%s, writer);\n", indent, name)
+			fmt.Fprintf(&b, "%swriter.ldelim();\n", indent)
+			return b.String(), nil
+		}
+		if field.IsDuration {
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.LDELIM)).fork();\n", indent, field.Number)
+			fmt.Fprintf(&b, "%swriteDuration(%s, writer);\n", indent, name)
+			fmt.Fprintf(&b, "%swriter.ldelim();\n", indent)
+			return b.String(), nil
+		}
+		switch field.Kind {
+		case ir.KindInt32:
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int32(Math.trunc(%s));\n", indent, field.Number, name)
+			return b.String(), nil
+		case ir.KindInt64:
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int64(Math.trunc(%s));\n", indent, field.Number, name)
+			return b.String(), nil
+		}
+	case "bigint":
+		if field.IsTimestamp {
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.LDELIM)).fork();\n", indent, field.Number)
+			fmt.Fprintf(&b, "%swriteTimestampFromBigInt(%s, writer);\n", indent, name)
+			fmt.Fprintf(&b, "%swriter.ldelim();\n", indent)
+			return b.String(), nil
+		}
+		if field.IsDuration {
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.LDELIM)).fork();\n", indent, field.Number)
+			fmt.Fprintf(&b, "%swriteDurationFromBigInt(%s, writer);\n", indent, name)
+			fmt.Fprintf(&b, "%swriter.ldelim();\n", indent)
+			return b.String(), nil
+		}
+		switch field.Kind {
+		case ir.KindInt32:
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int32(Number(%s));\n", indent, field.Number, name)
+			return b.String(), nil
+		case ir.KindInt64:
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int64(%s.toString());\n", indent, field.Number, name)
+			return b.String(), nil
+		}
+	}
+	return "", fmt.Errorf("unsupported js native type conversion for field: %s", field.Name)
+}
+
+func jsDecodeNativeField(field ir.Field, fieldName string) (string, bool, error) {
+	var b strings.Builder
+	if field.IsRepeated {
+		if field.Kind == ir.KindInt64 {
+			if field.IsPacked {
+				b.WriteString("                if ((tag & 7) === WIRE.LDELIM) {\n")
+				b.WriteString("                    const end2 = reader.uint32() + reader.pos;\n")
+				b.WriteString("                    while (reader.pos < end2) {\n")
+				if field.JSType == "bigint" {
+					b.WriteString("                        ")
+					b.WriteString(fieldName)
+					b.WriteString(".push(readInt64BigInt(reader, \"int64\"));\n")
+				} else {
+					b.WriteString("                        ")
+					b.WriteString(fieldName)
+					b.WriteString(".push(readInt64(reader, \"int64\"));\n")
+				}
+				b.WriteString("                    }\n")
+				b.WriteString("                } else {\n")
+				if field.JSType == "bigint" {
+					b.WriteString("                    ")
+					b.WriteString(fieldName)
+					b.WriteString(".push(readInt64BigInt(reader, \"int64\"));\n")
+				} else {
+					b.WriteString("                    ")
+					b.WriteString(fieldName)
+					b.WriteString(".push(readInt64(reader, \"int64\"));\n")
+				}
+				b.WriteString("                }\n")
+				return b.String(), true, nil
+			}
+			if field.JSType == "bigint" {
+				b.WriteString("                ")
+				b.WriteString(fieldName)
+				b.WriteString(".push(readInt64BigInt(reader, \"int64\"));\n")
+			} else {
+				b.WriteString("                ")
+				b.WriteString(fieldName)
+				b.WriteString(".push(readInt64(reader, \"int64\"));\n")
+			}
+			return b.String(), true, nil
+		}
+		if field.IsTimestamp {
+			b.WriteString("                ")
+			b.WriteString(fieldName)
+			if field.JSType == "bigint" {
+				b.WriteString(".push(decodeTimestampBigIntMessage(reader, reader.uint32()));\n")
+				return b.String(), true, nil
+			}
+			b.WriteString(".push(decodeTimestampMillisMessage(reader, reader.uint32()));\n")
+			return b.String(), true, nil
+		}
+		if field.IsDuration {
+			b.WriteString("                ")
+			b.WriteString(fieldName)
+			if field.JSType == "bigint" {
+				b.WriteString(".push(decodeDurationBigIntMessage(reader, reader.uint32()));\n")
+				return b.String(), true, nil
+			}
+			b.WriteString(".push(decodeDurationMessage(reader, reader.uint32()));\n")
+			return b.String(), true, nil
+		}
+		if field.Kind == ir.KindInt32 {
+			b.WriteString("                ")
+			b.WriteString(fieldName)
+			if field.JSType == "bigint" {
+				b.WriteString(".push(BigInt(reader.int32()));\n")
+			} else {
+				b.WriteString(".push(reader.int32());\n")
+			}
+			return b.String(), false, nil
+		}
+	}
+
+	if field.IsTimestamp {
+		if field.JSType == "bigint" {
+			return "                " + fieldName + " = decodeTimestampBigIntMessage(reader, reader.uint32());\n", true, nil
+		}
+		return "                " + fieldName + " = decodeTimestampMillisMessage(reader, reader.uint32());\n", true, nil
+	}
+	if field.IsDuration {
+		if field.JSType == "bigint" {
+			return "                " + fieldName + " = decodeDurationBigIntMessage(reader, reader.uint32());\n", true, nil
+		}
+		return "                " + fieldName + " = decodeDurationMessage(reader, reader.uint32());\n", true, nil
+	}
+	if field.Kind == ir.KindInt64 {
+		if field.JSType == "bigint" {
+			return "                " + fieldName + " = readInt64BigInt(reader, \"int64\");\n", true, nil
+		}
+		return "                " + fieldName + " = readInt64(reader, \"int64\");\n", true, nil
+	}
+	if field.Kind == ir.KindInt32 {
+		if field.JSType == "bigint" {
+			return "                " + fieldName + " = BigInt(reader.int32());\n", false, nil
+		}
+		return "                " + fieldName + " = reader.int32();\n", false, nil
+	}
+	return "", false, fmt.Errorf("unsupported js native type conversion for field: %s", field.Name)
 }
 
 func isJSReadInt64(field ir.Field) bool {
@@ -932,85 +1126,18 @@ func jsDecodePackedField(fieldName string, field ir.Field) (string, bool) {
 
 func jsDecodeTimestampSingle(fieldName string, field ir.Field) (string, bool) {
 	var b strings.Builder
-	if field.TimestampUnit == "wkt" {
-		b.WriteString("                ")
-		b.WriteString(fieldName)
-		b.WriteString(" = decodeTimestampMessage(reader, reader.uint32());\n")
-		return b.String(), true
-	}
-	if field.Kind == ir.KindInt64 {
-		b.WriteString("                const ts = readInt64(reader, \"int64\");\n")
-	} else {
-		b.WriteString("                const ts = reader.int32();\n")
-	}
-	if field.TimestampUnit == "seconds" {
-		b.WriteString("                ")
-		b.WriteString(fieldName)
-		b.WriteString(" = new Date(ts * 1000);\n")
-	} else {
-		b.WriteString("                ")
-		b.WriteString(fieldName)
-		b.WriteString(" = new Date(ts);\n")
-	}
-	return b.String(), field.Kind == ir.KindInt64
+	b.WriteString("                ")
+	b.WriteString(fieldName)
+	b.WriteString(" = decodeTimestampMessage(reader, reader.uint32());\n")
+	return b.String(), true
 }
 
 func jsDecodeTimestampRepeated(fieldName string, field ir.Field) (string, bool) {
 	var b strings.Builder
-	if field.TimestampUnit == "wkt" {
-		b.WriteString("                ")
-		b.WriteString(fieldName)
-		b.WriteString(".push(decodeTimestampMessage(reader, reader.uint32()));\n")
-		return b.String(), true
-	}
-	if field.IsPacked && jsIsPackable(field.Kind) {
-		b.WriteString("                if ((tag & 7) === WIRE.LDELIM) {\n")
-		b.WriteString("                    const end2 = reader.uint32() + reader.pos;\n")
-		b.WriteString("                    while (reader.pos < end2) {\n")
-		b.WriteString("                        ")
-		if field.Kind == ir.KindInt64 {
-			b.WriteString("const ts = readInt64(reader, \"int64\");\n")
-		} else {
-			b.WriteString("const ts = reader.int32();\n")
-		}
-		b.WriteString("                        ")
-		b.WriteString(fieldName)
-		if field.TimestampUnit == "seconds" {
-			b.WriteString(".push(new Date(ts * 1000));\n")
-		} else {
-			b.WriteString(".push(new Date(ts));\n")
-		}
-		b.WriteString("                    }\n")
-		b.WriteString("                } else {\n")
-		b.WriteString("                    ")
-		if field.Kind == ir.KindInt64 {
-			b.WriteString("const ts = readInt64(reader, \"int64\");\n")
-		} else {
-			b.WriteString("const ts = reader.int32();\n")
-		}
-		b.WriteString("                    ")
-		b.WriteString(fieldName)
-		if field.TimestampUnit == "seconds" {
-			b.WriteString(".push(new Date(ts * 1000));\n")
-		} else {
-			b.WriteString(".push(new Date(ts));\n")
-		}
-		b.WriteString("                }\n")
-		return b.String(), field.Kind == ir.KindInt64
-	}
-	if field.Kind == ir.KindInt64 {
-		b.WriteString("                const ts = readInt64(reader, \"int64\");\n")
-	} else {
-		b.WriteString("                const ts = reader.int32();\n")
-	}
 	b.WriteString("                ")
 	b.WriteString(fieldName)
-	if field.TimestampUnit == "seconds" {
-		b.WriteString(".push(new Date(ts * 1000));\n")
-	} else {
-		b.WriteString(".push(new Date(ts));\n")
-	}
-	return b.String(), field.Kind == ir.KindInt64
+	b.WriteString(".push(decodeTimestampMessage(reader, reader.uint32()));\n")
+	return b.String(), true
 }
 
 func jsDecodeTimestampWrapper(field ir.Field) (string, bool) {
@@ -1058,6 +1185,13 @@ func jsWrapperElemType(field ir.Field, msgIndex map[string]ir.Message) (string, 
 }
 
 func jsDecodeWrapperField(field ir.Field, msgIndex map[string]ir.Message) (string, bool, bool, error) {
+	if field.JSType != "" {
+		lines, needsReadInt64, err := jsDecodeNativeField(field, "message")
+		if err != nil {
+			return "", false, false, err
+		}
+		return lines, needsReadInt64, false, nil
+	}
 	if field.IsTimestamp {
 		lines, needsReadInt64 := jsDecodeTimestampWrapper(field)
 		return lines, needsReadInt64, true, nil

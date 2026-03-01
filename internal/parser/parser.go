@@ -179,7 +179,8 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		var mapValueEnum string
 		var isTimestamp bool
 		var isDuration bool
-		var timestampUnit string
+		var goType string
+		var jsType string
 		if field.IsMap() {
 			isMap = true
 			keyKind, err := kindFromField(field.MapKey())
@@ -202,7 +203,6 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			msgName = string(field.Message().FullName())
 			if msgName == "google.protobuf.Timestamp" {
 				isTimestamp = true
-				timestampUnit = "wkt"
 			}
 			if msgName == "google.protobuf.Duration" {
 				isDuration = true
@@ -210,19 +210,16 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		} else if kind == ir.KindEnum {
 			enumName = string(field.Enum().FullName())
 		}
-		tsOpt, err := tsFromFieldOptions(field)
+		goType, err = goTypeFromFieldOptions(field)
 		if err != nil {
 			return nil, err
 		}
-		if tsOpt != "" {
-			if tsOpt != "seconds" && tsOpt != "milliseconds" {
-				return nil, fmt.Errorf("invalid cleanproto.ts option on %s: %s", field.FullName(), tsOpt)
-			}
-			if kind != ir.KindInt32 && kind != ir.KindInt64 {
-				return nil, fmt.Errorf("cleanproto.ts only supported on int32/int64: %s", field.FullName())
-			}
-			isTimestamp = true
-			timestampUnit = tsOpt
+		jsType, err = jsTypeFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateNativeTypes(field.FullName(), kind, msgName, goType, jsType, field.IsMap()); err != nil {
+			return nil, err
 		}
 		isOptional := field.HasPresence() && !field.IsList() && !field.IsMap() && field.Kind() != protoreflect.MessageKind
 		result = append(result, ir.Field{
@@ -235,7 +232,8 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			IsMap:           isMap,
 			IsTimestamp:     isTimestamp,
 			IsDuration:      isDuration,
-			TimestampUnit:   timestampUnit,
+			GoType:          goType,
+			JSType:          jsType,
 			MapKeyKind:      mapKeyKind,
 			MapValueKind:    mapValueKind,
 			MapValueMessage: mapValueMessage,
@@ -245,6 +243,49 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		})
 	}
 	return result, nil
+}
+
+func validateNativeTypes(fullName protoreflect.FullName, kind ir.Kind, msgName string, goType string, jsType string, isMap bool) error {
+	if isMap && (goType != "" || jsType != "") {
+		return fmt.Errorf("cleanproto.go_type/js_type not supported on map fields: %s", fullName)
+	}
+	if goType != "" {
+		if !isSupportedGoType(kind, msgName, goType) {
+			return fmt.Errorf("unsupported cleanproto.go_type %q for %s", goType, fullName)
+		}
+	}
+	if jsType != "" {
+		if !isSupportedJSType(kind, msgName, jsType) {
+			return fmt.Errorf("unsupported cleanproto.js_type %q for %s", jsType, fullName)
+		}
+	}
+	return nil
+}
+
+func isSupportedGoType(kind ir.Kind, msgName string, goType string) bool {
+	switch goType {
+	case "time.Time":
+		return (kind == ir.KindMessage && msgName == "google.protobuf.Timestamp") || kind == ir.KindInt32 || kind == ir.KindInt64
+	case "time.Duration":
+		return (kind == ir.KindMessage && msgName == "google.protobuf.Duration") || kind == ir.KindInt32 || kind == ir.KindInt64
+	case "github.com/google/uuid.UUID":
+		return kind == ir.KindBytes
+	default:
+		return false
+	}
+}
+
+func isSupportedJSType(kind ir.Kind, msgName string, jsType string) bool {
+	if jsType != "number" && jsType != "bigint" {
+		return false
+	}
+	if kind == ir.KindInt32 || kind == ir.KindInt64 {
+		return true
+	}
+	if kind == ir.KindMessage && (msgName == "google.protobuf.Timestamp" || msgName == "google.protobuf.Duration") {
+		return true
+	}
+	return false
 }
 
 func kindFromField(field protoreflect.FieldDescriptor) (ir.Kind, error) {

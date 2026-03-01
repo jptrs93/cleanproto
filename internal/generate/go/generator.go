@@ -71,7 +71,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 		return nil, err
 	}
 	outputs = append(outputs, generate.OutputFile{
-		Path:    filepath.Join(utilDir, "util.go"),
+		Path:    filepath.Join(utilDir, "util.gen.go"),
 		Content: utilContent,
 	})
 	return outputs, nil
@@ -127,10 +127,14 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map
 		data.Enums = append(data.Enums, goEnum)
 	}
 	var usesTime bool
+	var usesUUID bool
 	for _, msg := range file.Messages {
-		goMsg, _, timeNeeded, err := buildGoMessage(msg, msgIndex, enumIndex)
+		goMsg, uuidNeeded, timeNeeded, err := buildGoMessage(msg, msgIndex, enumIndex)
 		if err != nil {
 			return goFileData{}, err
+		}
+		if uuidNeeded {
+			usesUUID = true
 		}
 		if timeNeeded {
 			usesTime = true
@@ -139,6 +143,9 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map
 	}
 	imports := []string{
 		"google.golang.org/protobuf/encoding/protowire",
+	}
+	if usesUUID {
+		imports = append([]string{"github.com/google/uuid"}, imports...)
 	}
 	if usesTime {
 		imports = append([]string{"time"}, imports...)
@@ -150,16 +157,17 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map
 func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (goMessage, bool, bool, error) {
 	out := goMessage{Name: msg.Name}
 	var usesTime bool
+	var usesUUID bool
 	for _, field := range msg.Fields {
 		goType, _, err := goFieldType(field, msgIndex, enumIndex)
 		if err != nil {
 			return goMessage{}, false, false, err
 		}
-		if field.IsTimestamp {
+		if field.IsTimestamp || field.IsDuration || field.GoType == "time.Time" || field.GoType == "time.Duration" {
 			usesTime = true
 		}
-		if field.IsDuration {
-			usesTime = true
+		if field.GoType == "github.com/google/uuid.UUID" {
+			usesUUID = true
 		}
 		out.Fields = append(out.Fields, goField{
 			Name:    ir.GoName(field.Name),
@@ -182,7 +190,7 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex ma
 	out.NeedsMsgBytes = needsMsgBytes
 	out.NeedsTmpBytes = needsTmpBytes
 
-	return out, false, usesTime, nil
+	return out, usesUUID, usesTime, nil
 }
 
 func toSnakeCase(name string) string {
@@ -206,6 +214,19 @@ func toSnakeCase(name string) string {
 }
 
 func goFieldType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (string, bool, error) {
+	if field.GoType != "" {
+		base, err := goNativeTypeName(field.GoType)
+		if err != nil {
+			return "", false, err
+		}
+		if field.IsRepeated {
+			return "[]" + base, false, nil
+		}
+		if field.IsOptional {
+			return "*" + base, false, nil
+		}
+		return base, false, nil
+	}
 	if field.IsTimestamp {
 		base := "time.Time"
 		if field.IsRepeated {
@@ -292,6 +313,19 @@ func goFieldType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[s
 	return t, mathNeeded, nil
 }
 
+func goNativeTypeName(goType string) (string, error) {
+	switch goType {
+	case "time.Time":
+		return "time.Time", nil
+	case "time.Duration":
+		return "time.Duration", nil
+	case "github.com/google/uuid.UUID":
+		return "uuid.UUID", nil
+	default:
+		return "", fmt.Errorf("unsupported go native type: %s", goType)
+	}
+}
+
 func goScalarType(kind ir.Kind, optional bool) (string, bool, error) {
 	var t string
 	var needsMath bool
@@ -342,6 +376,12 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 	for _, field := range msg.Fields {
 		fieldName := "m." + ir.GoName(field.Name)
 		switch {
+		case field.GoType != "":
+			nativeLines, err := goEncodeNative(fieldName, field)
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, nativeLines...)
 		case field.IsTimestamp:
 			tsLines, err := goEncodeTimestamp(fieldName, field)
 			if err != nil {
@@ -450,6 +490,189 @@ func goEncodeOptionalField(name string, field ir.Field) ([]string, error) {
 	return []string{fmt.Sprintf("b = %s(b, %s, %d)", helper, name, field.Number)}, nil
 }
 
+func goEncodeNative(fieldName string, field ir.Field) ([]string, error) {
+	appendFunc, err := goNativeAppendFunc(field)
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	if field.IsRepeated {
+		if field.IsPacked && (field.Kind == ir.KindInt32 || field.Kind == ir.KindInt64) {
+			compact := "AppendInt32Compact"
+			expr := goNativeRawValueExpr(field, "item")
+			if field.Kind == ir.KindInt64 {
+				compact = "AppendInt64Compact"
+			}
+			lines = append(lines, "var packed []byte")
+			lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
+			lines = append(lines, fmt.Sprintf("packed = %s(packed, %s)", compact, expr))
+			lines = append(lines, "}")
+			lines = append(lines, "if len(packed) > 0 {")
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+			lines = append(lines, "b = protowire.AppendBytes(b, packed)")
+			lines = append(lines, "}")
+			return lines, nil
+		}
+		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
+		lines = append(lines, fmt.Sprintf("b = %s(b, item, %d)", appendFunc, field.Number))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+	if field.IsOptional {
+		lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
+		lines = append(lines, fmt.Sprintf("b = %s(b, *%s, %d)", appendFunc, fieldName, field.Number))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+	lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", appendFunc, fieldName, field.Number))
+	return lines, nil
+}
+
+func goNativeRawValueExpr(field ir.Field, name string) string {
+	switch field.GoType {
+	case "time.Time":
+		if field.Kind == ir.KindInt32 {
+			return "int32(" + name + ".Unix())"
+		}
+		return name + ".Unix()"
+	case "time.Duration":
+		if field.Kind == ir.KindInt32 {
+			return "int32(" + name + " / time.Second)"
+		}
+		return "int64(" + name + " / time.Second)"
+	default:
+		return name
+	}
+}
+
+func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
+	consumeFunc, err := goNativeConsumeFunc(field)
+	if err != nil {
+		return nil, err
+	}
+	nativeType, err := goNativeTypeName(field.GoType)
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	if field.IsRepeated {
+		if field.IsPacked && (field.Kind == ir.KindInt32 || field.Kind == ir.KindInt64) {
+			rawType := "int32"
+			consumeRaw := "ConsumeVarInt32"
+			if field.Kind == ir.KindInt64 {
+				rawType = "int64"
+				consumeRaw = "ConsumeVarInt64"
+			}
+			lines = append(lines, "if typ == protowire.BytesType {")
+			lines = append(lines, "var packed []byte")
+			lines = append(lines, "b, packed, err = ConsumeBytes(b, typ)")
+			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, "for len(packed) > 0 {")
+			lines = append(lines, "var raw "+rawType)
+			lines = append(lines, "packed, raw, err = "+consumeRaw+"(packed, protowire.VarintType)")
+			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, fmt.Sprintf("tmp := %s", goNativeFromRawExpr(field, "raw")))
+			lines = append(lines, fmt.Sprintf("%s = append(%s, tmp)", fieldName, fieldName))
+			lines = append(lines, "}")
+			lines = append(lines, "} else {")
+			lines = append(lines, "var item "+nativeType)
+			lines = append(lines, "b, item, err = "+consumeFunc+"(b, typ)")
+			lines = append(lines, "if err == nil {")
+			lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+			lines = append(lines, "}")
+			lines = append(lines, "}")
+			return lines, nil
+		}
+		lines = append(lines, "var item "+nativeType)
+		lines = append(lines, "b, item, err = "+consumeFunc+"(b, typ)")
+		lines = append(lines, "if err == nil {")
+		lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+	lines = append(lines, "var item "+nativeType)
+	lines = append(lines, "b, item, err = "+consumeFunc+"(b, typ)")
+	lines = append(lines, "if err == nil {")
+	if field.IsOptional {
+		lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
+	} else {
+		lines = append(lines, fmt.Sprintf("%s = item", fieldName))
+	}
+	lines = append(lines, "}")
+	return lines, nil
+}
+
+func goNativeFromRawExpr(field ir.Field, rawName string) string {
+	switch field.GoType {
+	case "time.Time":
+		return "time.Unix(int64(" + rawName + "), 0)"
+	case "time.Duration":
+		return "time.Duration(" + rawName + ") * time.Second"
+	default:
+		return rawName
+	}
+}
+
+func goNativeAppendFunc(field ir.Field) (string, error) {
+	switch field.GoType {
+	case "time.Time":
+		if field.IsTimestamp {
+			return "AppendTimestampFromTime", nil
+		}
+		if field.Kind == ir.KindInt32 {
+			return "AppendInt32FromTime", nil
+		}
+		if field.Kind == ir.KindInt64 {
+			return "AppendInt64FromTime", nil
+		}
+	case "time.Duration":
+		if field.IsDuration {
+			return "AppendDurationFromDuration", nil
+		}
+		if field.Kind == ir.KindInt32 {
+			return "AppendInt32FromDuration", nil
+		}
+		if field.Kind == ir.KindInt64 {
+			return "AppendInt64FromDuration", nil
+		}
+	case "github.com/google/uuid.UUID":
+		if field.Kind == ir.KindBytes {
+			return "AppendBytesFromUUID", nil
+		}
+	}
+	return "", fmt.Errorf("unsupported go_type conversion for field %s", field.Name)
+}
+
+func goNativeConsumeFunc(field ir.Field) (string, error) {
+	switch field.GoType {
+	case "time.Time":
+		if field.IsTimestamp {
+			return "ConsumeTimeFromTimestamp", nil
+		}
+		if field.Kind == ir.KindInt32 {
+			return "ConsumeTimeFromInt32", nil
+		}
+		if field.Kind == ir.KindInt64 {
+			return "ConsumeTimeFromInt64", nil
+		}
+	case "time.Duration":
+		if field.IsDuration {
+			return "ConsumeDurationFromDuration", nil
+		}
+		if field.Kind == ir.KindInt32 {
+			return "ConsumeDurationFromInt32", nil
+		}
+		if field.Kind == ir.KindInt64 {
+			return "ConsumeDurationFromInt64", nil
+		}
+	case "github.com/google/uuid.UUID":
+		if field.Kind == ir.KindBytes {
+			return "ConsumeUUIDFromBytes", nil
+		}
+	}
+	return "", fmt.Errorf("unsupported go_type conversion for field %s", field.Name)
+}
+
 func goEncodeRepeatedEnum(fieldName string, field ir.Field) []string {
 	if field.IsPacked {
 		return []string{
@@ -520,50 +743,22 @@ func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
 	if field.IsRepeated {
 		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
 		lines = append(lines, "if item.IsZero() {", "continue", "}")
-		if field.TimestampUnit == "wkt" {
-			lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(item), %d)", field.Number))
-		} else {
-			valueExpr := goTimestampValue("item", field.TimestampUnit, field.Kind)
-			lines = append(lines, fmt.Sprintf("b = AppendVarIntField(b, %s, %d)", valueExpr, field.Number))
-		}
+		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(item), %d)", field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
 
 	if field.IsOptional {
 		lines = append(lines, fmt.Sprintf("if %s != nil && !%s.IsZero() {", fieldName, fieldName))
-		if field.TimestampUnit == "wkt" {
-			lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(*%s), %d)", fieldName, field.Number))
-		} else {
-			valueExpr := goTimestampValue("*"+fieldName, field.TimestampUnit, field.Kind)
-			lines = append(lines, fmt.Sprintf("b = AppendVarIntField(b, %s, %d)", valueExpr, field.Number))
-		}
+		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(*%s), %d)", fieldName, field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
 
 	lines = append(lines, fmt.Sprintf("if !%s.IsZero() {", fieldName))
-	if field.TimestampUnit == "wkt" {
-		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(%s), %d)", fieldName, field.Number))
-	} else {
-		valueExpr := goTimestampValue(fieldName, field.TimestampUnit, field.Kind)
-		lines = append(lines, fmt.Sprintf("b = AppendVarIntField(b, %s, %d)", valueExpr, field.Number))
-	}
+	lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(%s), %d)", fieldName, field.Number))
 	lines = append(lines, "}")
 	return lines, nil
-}
-
-func goTimestampValue(name string, unit string, kind ir.Kind) string {
-	var value string
-	if unit == "milliseconds" {
-		value = name + ".UnixMilli()"
-	} else {
-		value = name + ".Unix()"
-	}
-	if kind == ir.KindInt32 {
-		return "uint64(uint32(" + value + "))"
-	}
-	return "uint64(" + value + ")"
 }
 
 func goEncodeDuration(fieldName string, field ir.Field) ([]string, error) {
@@ -893,6 +1088,12 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 		c := goDecodeCase{Number: field.Number}
 		fieldName := "m." + ir.GoName(field.Name)
 		switch {
+		case field.GoType != "":
+			lines, err := goDecodeNative(fieldName, field)
+			if err != nil {
+				return nil, false, false, err
+			}
+			c.Lines = append(c.Lines, lines...)
 		case field.IsTimestamp:
 			lines, needsMsg, err := goDecodeTimestamp(fieldName, field)
 			if err != nil {
@@ -1152,61 +1353,21 @@ func goDecodeScalar(field ir.Field, name string) ([]string, bool, error) {
 func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error) {
 	var lines []string
 	if field.IsRepeated {
-		if field.TimestampUnit == "wkt" {
-			lines = append(lines, "var item time.Time")
-			lines = append(lines, "b, item, err = ConsumeTimestamp(b, typ)")
-			lines = append(lines, "if err == nil {")
-			lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
-			lines = append(lines, "}")
-			return lines, false, nil
-		}
-		consumeCall, err := goConsumeFunc(ir.Field{Kind: field.Kind})
-		if err != nil {
-			return nil, false, err
-		}
-		if field.IsPacked && isGoPackable(field.Kind) {
-			lines = append(lines, fmt.Sprintf("var raw []%s", goTimestampRawType(field.Kind)))
-			lines = append(lines, fmt.Sprintf("b, raw, err = ConsumeRepeatedCompact(b, typ, %s, %s)", goWireType(field.Kind), consumeCall))
-			lines = append(lines, "if err == nil {")
-			lines = append(lines, "for _, v := range raw {")
-			lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goTimestampFromValue("v", field.TimestampUnit)))
-			lines = append(lines, "}")
-			lines = append(lines, "}")
-			return lines, false, nil
-		}
-		lines = append(lines, fmt.Sprintf("var raw %s", goTimestampRawType(field.Kind)))
-		lines = append(lines, fmt.Sprintf("b, raw, err = ConsumeRepeatedElement(b, typ, %s)", consumeCall))
-		lines = append(lines, "if err == nil {")
-		lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goTimestampFromValue("raw", field.TimestampUnit)))
-		lines = append(lines, "}")
-		return lines, false, nil
-	}
-
-	if field.TimestampUnit == "wkt" {
 		lines = append(lines, "var item time.Time")
-		lines = append(lines, "b, item, err = ConsumeTimestamp(b, typ)")
+		lines = append(lines, "b, item, err = ConsumeTimeFromTimestamp(b, typ)")
 		lines = append(lines, "if err == nil {")
-		if field.IsOptional {
-			lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
-		} else {
-			lines = append(lines, fmt.Sprintf("%s = item", fieldName))
-		}
+		lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
 		lines = append(lines, "}")
 		return lines, false, nil
 	}
 
-	consumeCall, err := goConsumeFunc(ir.Field{Kind: field.Kind})
-	if err != nil {
-		return nil, false, err
-	}
-	lines = append(lines, fmt.Sprintf("var raw %s", goTimestampRawType(field.Kind)))
-	lines = append(lines, fmt.Sprintf("b, raw, err = %s(b, typ)", consumeCall))
+	lines = append(lines, "var item time.Time")
+	lines = append(lines, "b, item, err = ConsumeTimeFromTimestamp(b, typ)")
 	lines = append(lines, "if err == nil {")
 	if field.IsOptional {
-		lines = append(lines, fmt.Sprintf("tmp := %s", goTimestampFromValue("raw", field.TimestampUnit)))
-		lines = append(lines, fmt.Sprintf("%s = &tmp", fieldName))
+		lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
 	} else {
-		lines = append(lines, fmt.Sprintf("%s = %s", fieldName, goTimestampFromValue("raw", field.TimestampUnit)))
+		lines = append(lines, fmt.Sprintf("%s = item", fieldName))
 	}
 	lines = append(lines, "}")
 	return lines, false, nil
@@ -1233,20 +1394,6 @@ func goDecodeDuration(fieldName string, field ir.Field) ([]string, error) {
 	}
 	lines = append(lines, "}")
 	return lines, nil
-}
-
-func goTimestampRawType(kind ir.Kind) string {
-	if kind == ir.KindInt32 {
-		return "int32"
-	}
-	return "int64"
-}
-
-func goTimestampFromValue(name string, unit string) string {
-	if unit == "milliseconds" {
-		return "time.UnixMilli(int64(" + name + "))"
-	}
-	return "time.Unix(int64(" + name + "), 0)"
 }
 
 func goDecodeOptionalScalar(field ir.Field, fieldName string) ([]string, error) {
@@ -1443,6 +1590,9 @@ func loadUtilSource(pkg string) ([]byte, error) {
 	if strings.Contains(updated, "import (") && !strings.Contains(updated, "\"time\"") {
 		updated = strings.Replace(updated, "import (\n", "import (\n\t\"time\"\n", 1)
 	}
+	if strings.Contains(updated, "import (") && !strings.Contains(updated, "\"github.com/google/uuid\"") {
+		updated = strings.Replace(updated, "import (\n", "import (\n\t\"github.com/google/uuid\"\n", 1)
+	}
 	updated += "\n\n" + utilExtra
 	return []byte(updated), nil
 }
@@ -1512,6 +1662,51 @@ func ConsumeTimestamp(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
 	return b, msg, nil
 }
 
+func AppendTimestampFromTime(b []byte, v time.Time, num protowire.Number) []byte {
+	if v.IsZero() {
+		return b
+	}
+	return AppendBytesField(b, EncodeTimestamp(v), num)
+}
+
+func AppendInt32FromTime(b []byte, v time.Time, num protowire.Number) []byte {
+	if v.IsZero() {
+		return b
+	}
+	return AppendInt32Field(b, int32(v.Unix()), num)
+}
+
+func AppendInt64FromTime(b []byte, v time.Time, num protowire.Number) []byte {
+	if v.IsZero() {
+		return b
+	}
+	return AppendInt64Field(b, v.Unix(), num)
+}
+
+func ConsumeTimeFromTimestamp(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
+	return ConsumeTimestamp(b, typ)
+}
+
+func ConsumeTimeFromInt32(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
+	var raw int32
+	var err error
+	b, raw, err = ConsumeVarInt32(b, typ)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return b, time.Unix(int64(raw), 0), nil
+}
+
+func ConsumeTimeFromInt64(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
+	var raw int64
+	var err error
+	b, raw, err = ConsumeVarInt64(b, typ)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return b, time.Unix(raw, 0), nil
+}
+
 func EncodeDuration(d time.Duration) []byte {
 	if d == 0 {
 		return nil
@@ -1574,6 +1769,72 @@ func ConsumeDuration(b []byte, typ protowire.Type) ([]byte, time.Duration, error
 		return nil, 0, err
 	}
 	return b, msg, nil
+}
+
+func AppendDurationFromDuration(b []byte, v time.Duration, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	return AppendBytesField(b, EncodeDuration(v), num)
+}
+
+func AppendInt32FromDuration(b []byte, v time.Duration, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	return AppendInt32Field(b, int32(v/time.Second), num)
+}
+
+func AppendInt64FromDuration(b []byte, v time.Duration, num protowire.Number) []byte {
+	if v == 0 {
+		return b
+	}
+	return AppendInt64Field(b, int64(v/time.Second), num)
+}
+
+func ConsumeDurationFromDuration(b []byte, typ protowire.Type) ([]byte, time.Duration, error) {
+	return ConsumeDuration(b, typ)
+}
+
+func ConsumeDurationFromInt32(b []byte, typ protowire.Type) ([]byte, time.Duration, error) {
+	var raw int32
+	var err error
+	b, raw, err = ConsumeVarInt32(b, typ)
+	if err != nil {
+		return nil, 0, err
+	}
+	return b, time.Duration(raw) * time.Second, nil
+}
+
+func ConsumeDurationFromInt64(b []byte, typ protowire.Type) ([]byte, time.Duration, error) {
+	var raw int64
+	var err error
+	b, raw, err = ConsumeVarInt64(b, typ)
+	if err != nil {
+		return nil, 0, err
+	}
+	return b, time.Duration(raw) * time.Second, nil
+}
+
+func AppendBytesFromUUID(b []byte, v uuid.UUID, num protowire.Number) []byte {
+	if v == uuid.Nil {
+		return b
+	}
+	return AppendBytesField(b, v[:], num)
+}
+
+func ConsumeUUIDFromBytes(b []byte, typ protowire.Type) ([]byte, uuid.UUID, error) {
+	var raw []byte
+	var err error
+	b, raw, err = ConsumeBytes(b, typ)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	v, err := uuid.FromBytes(raw)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	return b, v, nil
 }
 
 func ConsumeMapEntry[K comparable, V any](b []byte, typ protowire.Type, m map[K]V, consumeK func([]byte, protowire.Type) ([]byte, K, error), consumeV func([]byte, protowire.Type) ([]byte, V, error)) ([]byte, error) {

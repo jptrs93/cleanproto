@@ -32,6 +32,18 @@ function readInt64(reader, method) {
     return value.toNumber();
 }
 {{- end}}
+{{- if .NeedsReadInt64BigInt}}
+function readInt64BigInt(reader, method) {
+    const value = reader[method]();
+    if (typeof value === "number") {
+        return BigInt(Math.trunc(value));
+    }
+    if (typeof value === "bigint") {
+        return value;
+    }
+    return BigInt(value.toString());
+}
+{{- end}}
 {{- if .NeedsTimestamp}}
 function writeTimestamp(value, writer) {
     if (!(value instanceof Date)) {
@@ -68,6 +80,77 @@ function decodeTimestampMessage(reader, length) {
     return new Date((seconds * 1000) + Math.floor(nanos / 1e6));
 }
 {{- end}}
+{{- if .NeedsTimestampNative}}
+function writeTimestampFromMillis(value, writer) {
+    if (value === undefined || value === null || value === 0) {
+        return;
+    }
+    const ms = Math.trunc(value);
+    const seconds = Math.floor(ms / 1000);
+    const nanos = Math.floor((ms - (seconds * 1000)) * 1e6);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds);
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeTimestampMillisMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000) + Math.floor(nanos / 1e6);
+}
+
+function writeTimestampFromBigInt(value, writer) {
+    if (value === undefined || value === null || value === 0n) {
+        return;
+    }
+    const ms = value;
+    const seconds = ms / 1000n;
+    const nanos = Number((ms % 1000n) * 1000000n);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds.toString());
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeTimestampBigIntMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0n;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64BigInt(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000n) + (BigInt(nanos) / 1000000n);
+}
+{{- end}}
 {{- if .NeedsDuration}}
 function writeDuration(value, writer) {
     if (value === undefined || value === null || value === 0) {
@@ -102,5 +185,41 @@ function decodeDurationMessage(reader, length) {
         }
     }
     return (seconds * 1000) + (nanos / 1e6);
+}
+{{- end}}
+{{- if .NeedsDurationBigInt}}
+function writeDurationFromBigInt(value, writer) {
+    if (value === undefined || value === null || value === 0n) {
+        return;
+    }
+    const totalNanos = value * 1000000n;
+    const seconds = totalNanos / 1000000000n;
+    const nanos = Number(totalNanos - (seconds * 1000000000n));
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds.toString());
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeDurationBigIntMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0n;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64BigInt(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000n) + (BigInt(nanos) / 1000000n);
 }
 {{- end}}

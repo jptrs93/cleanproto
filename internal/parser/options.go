@@ -24,7 +24,8 @@ extend google.protobuf.FileOptions {
 }
 
 extend google.protobuf.FieldOptions {
-  string ts = 50010;
+  string go_type = 50010;
+  string js_type = 50011;
 }
 `
 
@@ -46,12 +47,21 @@ var E_GoOut = &protoimpl.ExtensionInfo{
 	Filename:      optionsProtoPath,
 }
 
-var E_Ts = &protoimpl.ExtensionInfo{
+var E_GoType = &protoimpl.ExtensionInfo{
 	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
 	ExtensionType: (*string)(nil),
 	Field:         50010,
-	Name:          "cleanproto.ts",
-	Tag:           "bytes,50010,opt,name=ts",
+	Name:          "cleanproto.go_type",
+	Tag:           "bytes,50010,opt,name=go_type",
+	Filename:      optionsProtoPath,
+}
+
+var E_JsType = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*string)(nil),
+	Field:         50011,
+	Name:          "cleanproto.js_type",
+	Tag:           "bytes,50011,opt,name=js_type",
 	Filename:      optionsProtoPath,
 }
 
@@ -81,12 +91,25 @@ func goOutFromOptions(file protoreflect.FileDescriptor) (string, error) {
 	return str, nil
 }
 
-func tsFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
+func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
 	if !ok || opts == nil {
 		return "", nil
 	}
-	val := proto.GetExtension(opts, E_Ts)
+	val := proto.GetExtension(opts, E_GoType)
+	str, ok := val.(string)
+	if !ok || str == "" {
+		return "", nil
+	}
+	return str, nil
+}
+
+func jsTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return "", nil
+	}
+	val := proto.GetExtension(opts, E_JsType)
 	str, ok := val.(string)
 	if !ok || str == "" {
 		return "", nil

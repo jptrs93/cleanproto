@@ -11,6 +11,10 @@ func GoName(protoName string) string {
 		return ""
 	}
 	for i := range parts {
+		if i == len(parts)-1 && parts[i] == "id" {
+			parts[i] = "ID"
+			continue
+		}
 		parts[i] = title(parts[i])
 	}
 	return strings.Join(parts, "")

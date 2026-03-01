@@ -37,7 +37,8 @@ type Field struct {
 	IsMap           bool
 	IsTimestamp     bool
 	IsDuration      bool
-	TimestampUnit   string
+	GoType          string
+	JSType          string
 	MapKeyKind      Kind
 	MapValueKind    Kind
 	MapValueMessage string

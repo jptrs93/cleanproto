@@ -3,6 +3,8 @@ syntax = "proto3";
 package example;
 
 import "cleanproto/options.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 option go_package = "example";
 option (cleanproto.go_out) = ".build/go";
@@ -18,4 +20,27 @@ message Library {
   map<int32, int64> counts = 2;
   repeated int32 tags = 3 [packed = true];
   repeated string names = 4;
+}
+
+message NativeTypeCoverage {
+  int32 go_time_from_int32 = 1 [(cleanproto.go_type) = "time.Time"];
+  int64 go_time_from_int64 = 2 [(cleanproto.go_type) = "time.Time"];
+  google.protobuf.Timestamp go_time_from_timestamp = 3 [(cleanproto.go_type) = "time.Time"];
+
+  int32 go_duration_from_int32 = 4 [(cleanproto.go_type) = "time.Duration"];
+  int64 go_duration_from_int64 = 5 [(cleanproto.go_type) = "time.Duration"];
+  google.protobuf.Duration go_duration_from_duration = 6 [(cleanproto.go_type) = "time.Duration"];
+
+  bytes go_uuid_from_bytes = 7 [(cleanproto.go_type) = "github.com/google/uuid.UUID"];
+
+  int32 js_number_from_int32 = 8 [(cleanproto.js_type) = "number"];
+  int32 js_bigint_from_int32 = 9 [(cleanproto.js_type) = "bigint"];
+  int64 js_number_from_int64 = 10 [(cleanproto.js_type) = "number"];
+  int64 js_bigint_from_int64 = 11 [(cleanproto.js_type) = "bigint"];
+
+  google.protobuf.Timestamp js_number_from_timestamp = 12 [(cleanproto.js_type) = "number"];
+  google.protobuf.Timestamp js_bigint_from_timestamp = 13 [(cleanproto.js_type) = "bigint"];
+
+  google.protobuf.Duration js_number_from_duration = 14 [(cleanproto.js_type) = "number"];
+  google.protobuf.Duration js_bigint_from_duration = 15 [(cleanproto.js_type) = "bigint"];
 }
