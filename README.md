@@ -1,6 +1,6 @@
 # cleanproto
 
-A minimal proto3 generator that generates clean, readable code, supporting direct conversion to natural native types.
+A minimal proto3 generator that generates clean, fast, readable code, supporting natural native types for things like timestamps.
 
 Currently only supports Go and Javascript.
 
