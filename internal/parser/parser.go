@@ -177,6 +177,10 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		var isDuration bool
 		var goType string
 		var jsType string
+		goEncode := true
+		jsEncode := true
+		var goIgnore bool
+		var jsIgnore bool
 		if field.IsMap() {
 			isMap = true
 			keyKind, err := kindFromField(field.MapKey())
@@ -214,6 +218,22 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		if err != nil {
 			return nil, err
 		}
+		goEncode, err = goEncodeFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		jsEncode, err = jsEncodeFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		goIgnore, err = goIgnoreFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		jsIgnore, err = jsIgnoreFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
 		if err := validateNativeTypes(field.FullName(), kind, msgName, goType, jsType, field.IsMap()); err != nil {
 			return nil, err
 		}
@@ -230,6 +250,10 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			IsDuration:      isDuration,
 			GoType:          goType,
 			JSType:          jsType,
+			GoEncode:        goEncode,
+			GoIgnore:        goIgnore,
+			JsEncode:        jsEncode,
+			JsIgnore:        jsIgnore,
 			MapKeyKind:      mapKeyKind,
 			MapValueKind:    mapValueKind,
 			MapValueMessage: mapValueMessage,

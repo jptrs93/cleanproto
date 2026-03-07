@@ -41,4 +41,9 @@ message NativeTypeCoverage {
 
   google.protobuf.Duration js_number_from_duration = 14 [(cp.js.type) = "number"];
   google.protobuf.Duration js_bigint_from_duration = 15 [(cp.js.type) = "bigint"];
+
+  int32 go_encode_false = 16 [(cp.go.encode) = false];
+  int32 go_ignore_true = 17 [(cp.go.ignore) = true];
+  int32 js_encode_false = 18 [(cp.js.encode) = false];
+  int32 js_ignore_true = 19 [(cp.js.ignore) = true];
 }

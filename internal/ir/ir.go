@@ -37,6 +37,10 @@ type Field struct {
 	IsDuration      bool
 	GoType          string
 	JSType          string
+	GoEncode        bool
+	GoIgnore        bool
+	JsEncode        bool
+	JsIgnore        bool
 	MapKeyKind      Kind
 	MapValueKind    Kind
 	MapValueMessage string

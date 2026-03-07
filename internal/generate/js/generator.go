@@ -70,12 +70,14 @@ type jsMessage struct {
 func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, error) {
 	var data jsFileData
 	for _, msg := range file.Messages {
-		typedef, err := buildJSTypedef(msg, msgIndex)
+		msgForJS := msg
+		msgForJS.Fields = jsVisibleFields(msg.Fields)
+		typedef, err := buildJSTypedef(msgForJS, msgIndex)
 		if err != nil {
 			return jsFileData{}, err
 		}
 		data.Typedefs = append(data.Typedefs, typedef)
-		jsMsg, needsReadInt64, err := buildJSMessage(msg, msgIndex)
+		jsMsg, needsReadInt64, err := buildJSMessage(msgForJS, msgIndex)
 		if err != nil {
 			return jsFileData{}, err
 		}
@@ -88,7 +90,7 @@ func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, 
 		if jsMsg.NeedsDuration {
 			data.NeedsDuration = true
 		}
-		for _, field := range msg.Fields {
+		for _, field := range msgForJS.Fields {
 			if field.JSType == "bigint" && (field.Kind == ir.KindInt64 || field.IsTimestamp || field.IsDuration) {
 				data.NeedsReadInt64BigInt = true
 			}
@@ -203,6 +205,9 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 		return b.String(), needsReadInt64, needsTimestamp, needsDuration, nil
 	}
 	for _, field := range msg.Fields {
+		if !field.JsEncode {
+			continue
+		}
 		fieldName := "message." + field.Name
 		if field.IsTimestamp {
 			needsTimestamp = true
@@ -295,6 +300,9 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 	}
 	b.WriteString("}\n")
 	for _, field := range msg.Fields {
+		if !field.JsEncode {
+			continue
+		}
 		if isJSReadInt64(field) {
 			needsReadInt64 = true
 			break
@@ -701,20 +709,8 @@ func jsDecodeNativeField(field ir.Field, fieldName string) (string, bool, error)
 	if field.IsRepeated {
 		if field.Kind == ir.KindInt64 {
 			if field.IsPacked {
-				b.WriteString("                if ((tag & 7) === WIRE.LDELIM) {\n")
-				b.WriteString("                    const end2 = reader.uint32() + reader.pos;\n")
-				b.WriteString("                    while (reader.pos < end2) {\n")
-				if field.JSType == "bigint" {
-					b.WriteString("                        ")
-					b.WriteString(fieldName)
-					b.WriteString(".push(readInt64BigInt(reader, \"int64\"));\n")
-				} else {
-					b.WriteString("                        ")
-					b.WriteString(fieldName)
-					b.WriteString(".push(readInt64(reader, \"int64\"));\n")
-				}
-				b.WriteString("                    }\n")
-				b.WriteString("                } else {\n")
+				b.WriteString("                const end2 = reader.uint32() + reader.pos;\n")
+				b.WriteString("                while (reader.pos < end2) {\n")
 				if field.JSType == "bigint" {
 					b.WriteString("                    ")
 					b.WriteString(fieldName)
@@ -1086,24 +1082,8 @@ func jsMapValueDefault(field ir.Field, msgIndex map[string]ir.Message) string {
 func jsDecodePackedField(fieldName string, field ir.Field) (string, bool) {
 	var b strings.Builder
 	needsReadInt64 := isJSReadInt64(field)
-	b.WriteString("                if ((tag & 7) === WIRE.LDELIM) {\n")
-	b.WriteString("                    const end2 = reader.uint32() + reader.pos;\n")
-	b.WriteString("                    while (reader.pos < end2) {\n")
-	if needsReadInt64 {
-		b.WriteString("                        ")
-		b.WriteString(fieldName)
-		b.WriteString(".push(readInt64(reader, \"")
-		b.WriteString(jsReaderMethod(field.Kind))
-		b.WriteString("\"));\n")
-	} else {
-		b.WriteString("                        ")
-		b.WriteString(fieldName)
-		b.WriteString(".push(reader.")
-		b.WriteString(jsReaderMethod(field.Kind))
-		b.WriteString("());\n")
-	}
-	b.WriteString("                    }\n")
-	b.WriteString("                } else {\n")
+	b.WriteString("                const end2 = reader.uint32() + reader.pos;\n")
+	b.WriteString("                while (reader.pos < end2) {\n")
 	if needsReadInt64 {
 		b.WriteString("                    ")
 		b.WriteString(fieldName)
@@ -1170,6 +1150,17 @@ func jsIsRepeatedWrapper(msg ir.Message) (bool, ir.Field) {
 		return true, field
 	}
 	return false, ir.Field{}
+}
+
+func jsVisibleFields(fields []ir.Field) []ir.Field {
+	visible := make([]ir.Field, 0, len(fields))
+	for _, field := range fields {
+		if field.JsIgnore {
+			continue
+		}
+		visible = append(visible, field)
+	}
+	return visible
 }
 
 func jsWrapperElemType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {

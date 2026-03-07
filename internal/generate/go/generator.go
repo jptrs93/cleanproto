@@ -155,7 +155,8 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex ma
 	out := goMessage{Name: msg.Name}
 	var usesTime bool
 	var usesUUID bool
-	for _, field := range msg.Fields {
+	visibleFields := goVisibleFields(msg.Fields)
+	for _, field := range visibleFields {
 		goType, _, err := goFieldType(field, msgIndex, enumIndex)
 		if err != nil {
 			return goMessage{}, false, false, err
@@ -193,6 +194,17 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex ma
 	out.NeedsTmpBytes = needsTmpBytes
 
 	return out, usesUUID, usesTime, nil
+}
+
+func goVisibleFields(fields []ir.Field) []ir.Field {
+	visible := make([]ir.Field, 0, len(fields))
+	for _, field := range fields {
+		if field.GoIgnore {
+			continue
+		}
+		visible = append(visible, field)
+	}
+	return visible
 }
 
 func toSnakeCase(name string) string {
@@ -376,6 +388,9 @@ func goScalarType(kind ir.Kind, optional bool) (string, bool, error) {
 func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) ([]string, error) {
 	var lines []string
 	for _, field := range msg.Fields {
+		if field.GoIgnore || !field.GoEncode {
+			continue
+		}
 		fieldName := "m." + ir.GoName(field.Name)
 		switch {
 		case field.GoType != "":
@@ -565,7 +580,6 @@ func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
 				rawType = "int64"
 				consumeRaw = "ConsumeVarInt64"
 			}
-			lines = append(lines, "if typ == protowire.BytesType {")
 			lines = append(lines, "var packed []byte")
 			lines = append(lines, "b, packed, err = ConsumeBytes(b, typ)")
 			lines = append(lines, "if err != nil {", "return nil, err", "}")
@@ -575,13 +589,6 @@ func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
 			lines = append(lines, "if err != nil {", "return nil, err", "}")
 			lines = append(lines, fmt.Sprintf("tmp := %s", goNativeFromRawExpr(field, "raw")))
 			lines = append(lines, fmt.Sprintf("%s = append(%s, tmp)", fieldName, fieldName))
-			lines = append(lines, "}")
-			lines = append(lines, "} else {")
-			lines = append(lines, "var item "+nativeType)
-			lines = append(lines, "b, item, err = "+consumeFunc+"(b, typ)")
-			lines = append(lines, "if err == nil {")
-			lines = append(lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
-			lines = append(lines, "}")
 			lines = append(lines, "}")
 			return lines, nil
 		}
@@ -1087,6 +1094,9 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 	needsMsgBytes := false
 	needsTmpBytes := false
 	for _, field := range msg.Fields {
+		if field.GoIgnore {
+			continue
+		}
 		c := goDecodeCase{Number: field.Number}
 		fieldName := "m." + ir.GoName(field.Name)
 		switch {
@@ -1224,7 +1234,6 @@ func goDecodeEnum(fieldName string, field ir.Field, enumType string) []string {
 	if field.IsRepeated {
 		if field.IsPacked {
 			return []string{
-				"if typ == protowire.BytesType {",
 				"var packed []byte",
 				"b, packed, err = ConsumeBytes(b, typ)",
 				"if err != nil {", "return nil, err", "}",
@@ -1233,13 +1242,6 @@ func goDecodeEnum(fieldName string, field ir.Field, enumType string) []string {
 				"packed, raw, err = ConsumeVarInt32(packed, protowire.VarintType)",
 				"if err != nil {", "return nil, err", "}",
 				fmt.Sprintf("%s = append(%s, %s(raw))", fieldName, fieldName, enumType),
-				"}",
-				"} else {",
-				"var raw int32",
-				"b, raw, err = ConsumeVarInt32(b, typ)",
-				"if err == nil {",
-				fmt.Sprintf("%s = append(%s, %s(raw))", fieldName, fieldName, enumType),
-				"}",
 				"}",
 			}
 		}

@@ -205,7 +205,11 @@ export function decodeAuditEvent(buffer) {
 ## Options in .proto
 - `option go_package = "module/path;pkg";` for Go package name.
 - `option (cp.go.type) = "time.Time" | "time.Duration" | "github.com/google/uuid.UUID";` on fields for Go native type conversion (requires `import "cleanproto/options.proto";`).
+- `option (cp.go.encode) = false;` on fields to keep the field in generated Go type definitions but skip writing it during Go encoding.
+- `option (cp.go.ignore) = true;` on fields to omit the field from generated Go type definitions and Go encode/decode.
 - `option (cp.js.type) = "number" | "bigint";` on fields for JS native type conversion (requires `import "cleanproto/options.proto";`).
+- `option (cp.js.encode) = false;` on fields to keep the field in generated JS typedefs but skip writing it during JS encoding.
+- `option (cp.js.ignore) = true;` on fields to omit the field from generated JS typedefs and JS encode/decode.
 
 ## CLI args
 - `-go.out` output directory for Go.
@@ -218,4 +222,5 @@ export function decodeAuditEvent(buffer) {
 - `oneof` not supported.
 - Generated Javascript code uses `protobufjs/minimal`.
 - Go output embeds `util.gen.go` which requires `google.golang.org/protobuf/encoding/protowire`.
+- `cp.<lang>.ignore = true` takes precedence over `cp.<lang>.encode = false` for that language, since ignored fields are omitted entirely.
 - When you specify a native type (for example `(cp.go.type) = "time.Duration"` or `(cp.js.type) = "bigint"`), it does not change the wire serialization; it only changes generated API types plus conversion code. For example, `int32 created_at = 1 [(cp.go.type) = "time.Time"];` still encodes on the wire as `int32` varint. It is assumed as epoch seconds. And if you used int64 it would be assumed as epoch milliseconds. These assumed conversions at not configurable. You can only add a native type option on a compatible wire type with a supported conversion. A native type option on an incompatible wire type will result in an error.
