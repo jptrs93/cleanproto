@@ -46,4 +46,8 @@ message NativeTypeCoverage {
   int32 go_ignore_true = 17 [(cp.go.ignore) = true];
   int32 js_encode_false = 18 [(cp.js.encode) = false];
   int32 js_ignore_true = 19 [(cp.js.ignore) = true];
+
+  int32 js_date_from_int32 = 20 [(cp.js.type) = "Date"];
+  int64 js_date_from_int64 = 21 [(cp.js.type) = "Date"];
+  google.protobuf.Timestamp js_date_from_timestamp = 22 [(cp.js.type) = "Date"];
 }
