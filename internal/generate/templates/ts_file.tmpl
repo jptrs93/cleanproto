@@ -1,10 +1,11 @@
+import protobufjsm from 'protobufjs/minimal';
+import type { Reader, Writer } from 'protobufjs/minimal';
+const { Reader, Writer } = protobufjsm;
+
 {{- range .TypeDecls}}
 {{.}}
 
 {{- end}}
-import protobufjsm from 'protobufjs/minimal';
-import type { Reader, Writer } from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
 
 const WIRE = {
     VARINT: 0,
