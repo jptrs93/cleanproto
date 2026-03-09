@@ -12,6 +12,7 @@ import (
 const optionsProtoPath = "cleanproto/options.proto"
 const goTypeOptionsProtoPath = "cp/go/options.proto"
 const jsTypeOptionsProtoPath = "cp/js/options.proto"
+const tsTypeOptionsProtoPath = "cp/ts/options.proto"
 
 const optionsProtoSource = `
 syntax = "proto3";
@@ -20,6 +21,7 @@ package cleanproto;
 
 import public "cp/go/options.proto";
 import public "cp/js/options.proto";
+import public "cp/ts/options.proto";
 `
 
 const goTypeOptionsProtoSource = `
@@ -47,6 +49,20 @@ extend google.protobuf.FieldOptions {
   string type = 50011;
   bool encode = 50013;
   bool ignore = 50015;
+}
+`
+
+const tsTypeOptionsProtoSource = `
+syntax = "proto3";
+
+package cp.ts;
+
+import "google/protobuf/descriptor.proto";
+
+extend google.protobuf.FieldOptions {
+  string type = 50016;
+  bool encode = 50017;
+  bool ignore = 50018;
 }
 `
 
@@ -104,6 +120,33 @@ var E_JsIgnore = &protoimpl.ExtensionInfo{
 	Filename:      jsTypeOptionsProtoPath,
 }
 
+var E_TsType = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*string)(nil),
+	Field:         50016,
+	Name:          "cp.ts.type",
+	Tag:           "bytes,50016,opt,name=type",
+	Filename:      tsTypeOptionsProtoPath,
+}
+
+var E_TsEncode = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50017,
+	Name:          "cp.ts.encode",
+	Tag:           "varint,50017,opt,name=encode",
+	Filename:      tsTypeOptionsProtoPath,
+}
+
+var E_TsIgnore = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50018,
+	Name:          "cp.ts.ignore",
+	Tag:           "varint,50018,opt,name=ignore",
+	Filename:      tsTypeOptionsProtoPath,
+}
+
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
 	if !ok || opts == nil {
@@ -123,6 +166,19 @@ func jsTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) 
 		return "", nil
 	}
 	val := proto.GetExtension(opts, E_JsType)
+	str, ok := val.(string)
+	if !ok || str == "" {
+		return "", nil
+	}
+	return str, nil
+}
+
+func tsTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return "", nil
+	}
+	val := proto.GetExtension(opts, E_TsType)
 	str, ok := val.(string)
 	if !ok || str == "" {
 		return "", nil
@@ -162,6 +218,22 @@ func jsEncodeFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) 
 	return b, nil
 }
 
+func tsEncodeFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return true, nil
+	}
+	if !proto.HasExtension(opts, E_TsEncode) {
+		return true, nil
+	}
+	val := proto.GetExtension(opts, E_TsEncode)
+	b, ok := val.(bool)
+	if !ok {
+		return true, nil
+	}
+	return b, nil
+}
+
 func goIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
 	if !ok || opts == nil {
@@ -181,6 +253,19 @@ func jsIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) 
 		return false, nil
 	}
 	val := proto.GetExtension(opts, E_JsIgnore)
+	b, ok := val.(bool)
+	if !ok {
+		return false, nil
+	}
+	return b, nil
+}
+
+func tsIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return false, nil
+	}
+	val := proto.GetExtension(opts, E_TsIgnore)
 	b, ok := val.(bool)
 	if !ok {
 		return false, nil

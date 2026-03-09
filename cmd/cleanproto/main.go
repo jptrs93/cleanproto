@@ -10,6 +10,7 @@ import (
 	"github.com/jptrs93/cleanproto/internal/generate"
 	gogen "github.com/jptrs93/cleanproto/internal/generate/go"
 	jsg "github.com/jptrs93/cleanproto/internal/generate/js"
+	tsg "github.com/jptrs93/cleanproto/internal/generate/ts"
 	"github.com/jptrs93/cleanproto/internal/parser"
 )
 
@@ -29,12 +30,14 @@ func main() {
 	var goOut string
 	var goPkg string
 	var jsOut string
+	var tsOut string
 	var goJSONTags string
 
 	flag.Var(&importPaths, "proto_path", "proto import path (repeatable)")
 	flag.StringVar(&goOut, "go.out", "", "output directory for Go")
 	flag.StringVar(&goPkg, "go.pkg", "", "Go package name for generated code")
 	flag.StringVar(&jsOut, "js.out", "", "output directory for JS")
+	flag.StringVar(&tsOut, "ts.out", "", "output directory for TS")
 	flag.StringVar(&goJSONTags, "go.jsontags", "", "Go JSON tags style (snake)")
 	flag.Parse()
 
@@ -45,8 +48,8 @@ func main() {
 	if len(importPaths) == 0 {
 		importPaths = append(importPaths, ".")
 	}
-	if goOut == "" && jsOut == "" {
-		fmt.Fprintln(os.Stderr, "at least one of -go.out or -js.out is required")
+	if goOut == "" && jsOut == "" && tsOut == "" {
+		fmt.Fprintln(os.Stderr, "at least one of -go.out, -js.out, or -ts.out is required")
 		os.Exit(1)
 	}
 	if goJSONTags != "" && goJSONTags != "snake" {
@@ -66,12 +69,14 @@ func main() {
 		GoPackage:  goPkg,
 		GoOut:      cleanPath(goOut),
 		JsOut:      cleanPath(jsOut),
+		TsOut:      cleanPath(tsOut),
 		GoJSONTags: goJSONTags,
 	}
 
 	generators := []generate.Generator{
 		gogen.Generator{},
 		jsg.Generator{},
+		tsg.Generator{},
 	}
 
 	for _, gen := range generators {

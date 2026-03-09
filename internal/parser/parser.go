@@ -30,6 +30,9 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 			if path == jsTypeOptionsProtoPath || strings.HasSuffix(path, string(os.PathSeparator)+jsTypeOptionsProtoPath) {
 				return io.NopCloser(strings.NewReader(jsTypeOptionsProtoSource)), nil
 			}
+			if path == tsTypeOptionsProtoPath || strings.HasSuffix(path, string(os.PathSeparator)+tsTypeOptionsProtoPath) {
+				return io.NopCloser(strings.NewReader(tsTypeOptionsProtoSource)), nil
+			}
 			return os.Open(path)
 		},
 	}
@@ -177,10 +180,13 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		var isDuration bool
 		var goType string
 		var jsType string
+		var tsType string
 		goEncode := true
 		jsEncode := true
+		tsEncode := true
 		var goIgnore bool
 		var jsIgnore bool
+		var tsIgnore bool
 		if field.IsMap() {
 			isMap = true
 			keyKind, err := kindFromField(field.MapKey())
@@ -218,11 +224,19 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		if err != nil {
 			return nil, err
 		}
+		tsType, err = tsTypeFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
 		goEncode, err = goEncodeFromFieldOptions(field)
 		if err != nil {
 			return nil, err
 		}
 		jsEncode, err = jsEncodeFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		tsEncode, err = tsEncodeFromFieldOptions(field)
 		if err != nil {
 			return nil, err
 		}
@@ -234,7 +248,11 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := validateNativeTypes(field.FullName(), kind, msgName, goType, jsType, field.IsMap()); err != nil {
+		tsIgnore, err = tsIgnoreFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateNativeTypes(field.FullName(), kind, msgName, goType, jsType, tsType, field.IsMap()); err != nil {
 			return nil, err
 		}
 		isOptional := field.HasPresence() && !field.IsList() && !field.IsMap() && field.Kind() != protoreflect.MessageKind
@@ -250,10 +268,13 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			IsDuration:      isDuration,
 			GoType:          goType,
 			JSType:          jsType,
+			TSType:          tsType,
 			GoEncode:        goEncode,
 			GoIgnore:        goIgnore,
 			JsEncode:        jsEncode,
 			JsIgnore:        jsIgnore,
+			TsEncode:        tsEncode,
+			TsIgnore:        tsIgnore,
 			MapKeyKind:      mapKeyKind,
 			MapValueKind:    mapValueKind,
 			MapValueMessage: mapValueMessage,
@@ -265,9 +286,9 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 	return result, nil
 }
 
-func validateNativeTypes(fullName protoreflect.FullName, kind ir.Kind, msgName string, goType string, jsType string, isMap bool) error {
-	if isMap && (goType != "" || jsType != "") {
-		return fmt.Errorf("cp.go.type/cp.js.type not supported on map fields: %s", fullName)
+func validateNativeTypes(fullName protoreflect.FullName, kind ir.Kind, msgName string, goType string, jsType string, tsType string, isMap bool) error {
+	if isMap && (goType != "" || jsType != "" || tsType != "") {
+		return fmt.Errorf("cp.go.type/cp.js.type/cp.ts.type not supported on map fields: %s", fullName)
 	}
 	if goType != "" {
 		if !isSupportedGoType(kind, msgName, goType) {
@@ -279,7 +300,31 @@ func validateNativeTypes(fullName protoreflect.FullName, kind ir.Kind, msgName s
 			return fmt.Errorf("unsupported cp.js.type %q for %s", jsType, fullName)
 		}
 	}
+	if tsType != "" {
+		if !isSupportedTSType(kind, msgName, tsType) {
+			return fmt.Errorf("unsupported cp.ts.type %q for %s", tsType, fullName)
+		}
+	}
 	return nil
+}
+
+func isSupportedTSType(kind ir.Kind, msgName string, tsType string) bool {
+	if tsType != "number" && tsType != "bigint" && tsType != "Date" {
+		return false
+	}
+	if tsType == "Date" {
+		if kind == ir.KindInt32 || kind == ir.KindInt64 {
+			return true
+		}
+		return kind == ir.KindMessage && msgName == "google.protobuf.Timestamp"
+	}
+	if kind == ir.KindInt32 || kind == ir.KindInt64 {
+		return true
+	}
+	if kind == ir.KindMessage && (msgName == "google.protobuf.Timestamp" || msgName == "google.protobuf.Duration") {
+		return true
+	}
+	return false
 }
 
 func isSupportedGoType(kind ir.Kind, msgName string, goType string) bool {

@@ -2,7 +2,7 @@
 
 A minimal proto3 generator that generates clean, fast, readable code, supporting natural native types for things like timestamps.
 
-Currently only supports Go and Javascript.
+Currently supports Go, JavaScript, and TypeScript.
 
 ## Install
 ```
@@ -11,7 +11,7 @@ go install github.com/jptrs93/cleanproto/cmd/cleanproto@latest
 
 ## Usage
 ```
-cleanproto -proto_path ../protos -go.out ./gen/go -go.pkg api -js.out ./gen/js example.proto
+cleanproto -proto_path ../protos -go.out ./gen/go -go.pkg api -js.out ./gen/js -ts.out ./gen/ts example.proto
 ```
 
 ## End-to-end example
@@ -46,6 +46,7 @@ cleanproto \
   -go.out ./gen/go \
   -go.pkg demo \
   -js.out ./gen/js \
+  -ts.out ./gen/ts \
   audit.proto
 ```
 
@@ -203,6 +204,82 @@ export function decodeAuditEvent(buffer) {
 }
 ```
 
+Example TS output (`gen/ts/model.ts`):
+
+```ts
+export interface AuditEvent {
+  occurredAt: bigint;
+  timeout: bigint;
+  requestId: Uint8Array;
+  actorId: bigint;
+  syncedAt: number;
+}
+
+import protobufjsm from 'protobufjs/minimal';
+const { Reader, Writer } = protobufjsm;
+
+export function writeAuditEvent(message: AuditEvent, writer: Writer): void {
+  if (message.occurredAt !== undefined && message.occurredAt !== null && message.occurredAt !== 0n) {
+    writer.uint32(tag(1, WIRE.VARINT)).int64(message.occurredAt.toString());
+  }
+  if (message.timeout !== undefined && message.timeout !== null && message.timeout !== 0n) {
+    writer.uint32(tag(2, WIRE.LDELIM)).fork();
+    writeDurationFromBigInt(message.timeout, writer);
+    writer.ldelim();
+  }
+  if (message.requestId && message.requestId.length > 0) {
+    writer.uint32(tag(3, WIRE.LDELIM)).bytes(message.requestId);
+  }
+  if (message.actorId !== undefined && message.actorId !== null && message.actorId !== 0n) {
+    writer.uint32(tag(4, WIRE.VARINT)).int64(message.actorId.toString());
+  }
+  if (message.syncedAt !== undefined && message.syncedAt !== null && message.syncedAt !== 0) {
+    writer.uint32(tag(5, WIRE.LDELIM)).fork();
+    writeTimestampFromMillis(message.syncedAt, writer);
+    writer.ldelim();
+  }
+}
+
+export function encodeAuditEvent(message: AuditEvent): Uint8Array {
+  const writer = Writer.create();
+  writeAuditEvent(message, writer);
+  return writer.finish();
+}
+
+function decodeAuditEventMessage(reader: Reader, length?: number): AuditEvent {
+  const end = length === undefined ? reader.len : reader.pos + length;
+  const message: AuditEvent = { occurredAt: 0n, timeout: 0n, requestId: new Uint8Array(0), actorId: 0n, syncedAt: 0 };
+  while (reader.pos < end) {
+    const tag = reader.uint32();
+    switch (tag >>> 3) {
+      case 1:
+        message.occurredAt = readInt64BigInt(reader, 'int64');
+        break;
+      case 2:
+        message.timeout = decodeDurationBigIntMessage(reader, reader.uint32());
+        break;
+      case 3:
+        message.requestId = reader.bytes();
+        break;
+      case 4:
+        message.actorId = readInt64BigInt(reader, 'int64');
+        break;
+      case 5:
+        message.syncedAt = decodeTimestampMillisMessage(reader, reader.uint32());
+        break;
+      default:
+        reader.skipType(tag & 7);
+    }
+  }
+  return message;
+}
+
+export function decodeAuditEvent(buffer: ArrayBuffer): AuditEvent {
+  const reader = Reader.create(new Uint8Array(buffer));
+  return decodeAuditEventMessage(reader);
+}
+```
+
 ## Options in .proto
 - `option go_package = "module/path;pkg";` for Go package name.
 - `option (cp.go.type) = "time.Time" | "time.Duration" | "github.com/google/uuid.UUID";` on fields for Go native type conversion (requires `import "cleanproto/options.proto";`).
@@ -211,12 +288,16 @@ export function decodeAuditEvent(buffer) {
 - `option (cp.js.type) = "number" | "bigint" | "Date";` on fields for JS native type conversion (requires `import "cleanproto/options.proto";`).
 - `option (cp.js.encode) = false;` on fields to keep the field in generated JS typedefs but skip writing it during JS encoding.
 - `option (cp.js.ignore) = true;` on fields to omit the field from generated JS typedefs and JS encode/decode.
+- `option (cp.ts.type) = "number" | "bigint" | "Date";` on fields for TS native type conversion (requires `import "cleanproto/options.proto";`). In TS output, 64-bit integer wire types default to `bigint` when no explicit `cp.ts.type` is set.
+- `option (cp.ts.encode) = false;` on fields to keep the field in generated TS type definitions but skip writing it during TS encoding.
+- `option (cp.ts.ignore) = true;` on fields to omit the field from generated TS type definitions and TS encode/decode.
 
 ## CLI args
 - `-go.out` output directory for Go.
 - `-go.pkg` Go package name for generated code.
 - `-go.jsontags snake` Go JSON tag style; omit to generate no JSON tags.
 - `-js.out` output directory for JS.
+- `-ts.out` output directory for TS.
 
 ## Notes
 - Unknown fields are ignored on decode.

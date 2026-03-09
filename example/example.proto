@@ -50,4 +50,11 @@ message NativeTypeCoverage {
   int32 js_date_from_int32 = 20 [(cp.js.type) = "Date"];
   int64 js_date_from_int64 = 21 [(cp.js.type) = "Date"];
   google.protobuf.Timestamp js_date_from_timestamp = 22 [(cp.js.type) = "Date"];
+
+  int64 ts_default_bigint_from_int64 = 23;
+  int64 ts_number_from_int64 = 24 [(cp.ts.type) = "number"];
+  int32 ts_bigint_from_int32 = 25 [(cp.ts.type) = "bigint"];
+  google.protobuf.Timestamp ts_date_from_timestamp = 26 [(cp.ts.type) = "Date"];
+  int32 ts_encode_false = 27 [(cp.ts.encode) = false];
+  int32 ts_ignore_true = 28 [(cp.ts.ignore) = true];
 }

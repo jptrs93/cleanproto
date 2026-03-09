@@ -11,6 +11,7 @@ type Options struct {
 	GoPackage  string
 	GoOut      string
 	JsOut      string
+	TsOut      string
 	GoJSONTags string
 }
 
