@@ -2,7 +2,8 @@
 {{.}}
 
 {{- end}}
-import {Reader, Writer} from "protobufjs/minimal";
+import protobufjsm from 'protobufjs/minimal';
+const { Reader, Writer } = protobufjsm;
 
 const WIRE = {
     VARINT: 0,

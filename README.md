@@ -129,7 +129,8 @@ func DecodeAuditEvent(b []byte) (*AuditEvent, error) {
 Example JS output (`gen/js/model.js`):
 
 ```js
-import {Reader, Writer} from "protobufjs/minimal";
+import protobufjsm from 'protobufjs/minimal';
+const { Reader, Writer } = protobufjsm;
 
 /**
  * @typedef {Object} AuditEvent
