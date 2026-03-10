@@ -104,6 +104,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		Path       string
 		Input      string
 		Output     string
+		InputEmpty bool
+		OutEmpty   bool
 		GoCustom   bool
 		NoAuth     bool
 		Scopes     []string
@@ -131,6 +133,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 				Path:       path,
 				Input:      in.Name,
 				Output:     out.Name,
+				InputEmpty: in.Name == "Empty" || strings.HasSuffix(m.InputFullName, ".Empty"),
+				OutEmpty:   out.Name == "Empty" || strings.HasSuffix(m.OutputFullName, ".Empty"),
 				GoCustom:   m.GoCustom,
 				NoAuth:     m.PolicyType == 1,
 				Scopes:     append([]string(nil), m.PolicyScopes...),
@@ -167,7 +171,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			b.WriteString("\t")
 			b.WriteString(m.Handler)
 			b.WriteString("(context.Context")
-			if m.Input != "Empty" {
+			if !m.InputEmpty {
 				b.WriteString(", *")
 				b.WriteString(m.Input)
 			}
@@ -177,11 +181,11 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		b.WriteString("\t")
 		b.WriteString(m.Handler)
 		b.WriteString("(context.Context")
-		if m.Input != "Empty" {
+		if !m.InputEmpty {
 			b.WriteString(", *")
 			b.WriteString(m.Input)
 		}
-		if m.Output == "Empty" {
+		if m.OutEmpty {
 			b.WriteString(") error\n")
 		} else {
 			b.WriteString(") (*")
@@ -211,7 +215,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		b.WriteString("\t\t\t\treturn\n")
 		b.WriteString("\t\t\t}\n")
 		if m.GoCustom {
-			if m.Input == "Empty" {
+			if m.InputEmpty {
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
 				b.WriteString("(ctx, w)\n")
@@ -234,7 +238,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			b.WriteString("\t\t}, middlewares...))\n")
 			continue
 		}
-		if m.Input != "Empty" {
+		if !m.InputEmpty {
 			b.WriteString("\t\t\treq, err := decodeBody(r, Decode")
 			b.WriteString(m.Input)
 			b.WriteString(")\n")
@@ -243,8 +247,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
 		}
-		if m.Output == "Empty" {
-			if m.Input == "Empty" {
+		if m.OutEmpty {
+			if m.InputEmpty {
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
 				b.WriteString("(ctx)\n")
@@ -259,7 +263,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			b.WriteString("\t\t\t}\n")
 			b.WriteString("\t\t\tw.WriteHeader(http.StatusNoContent)\n")
 		} else {
-			if m.Input == "Empty" {
+			if m.InputEmpty {
 				b.WriteString("\t\t\tres, err := h.")
 				b.WriteString(m.Handler)
 				b.WriteString("(ctx)\n")
