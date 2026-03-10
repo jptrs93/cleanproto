@@ -3,180 +3,27 @@ package parser
 import (
 	"strings"
 
+	"github.com/jptrs93/cleanproto"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/runtime/protoimpl"
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
-const optionsProtoPath = "cleanproto/options.proto"
-const goTypeOptionsProtoPath = "cp/go/options.proto"
-const jsTypeOptionsProtoPath = "cp/js/options.proto"
-const tsTypeOptionsProtoPath = "cp/ts/options.proto"
+const optionsProtoPath = cp.OptionsProtoPath
 
-const optionsProtoSource = `
-syntax = "proto3";
+var optionsProtoSource = cp.OptionsProtoSource
 
-package cp;
-
-import "google/protobuf/descriptor.proto";
-import public "cp/go/options.proto";
-import public "cp/js/options.proto";
-import public "cp/ts/options.proto";
-
-enum AccessPolicyType {
-  ACCESS_POLICY_TYPE_UNSPECIFIED = 0;
-  NO_AUTH = 1;
-  OPTIONAL_AUTH = 2;
-  ANY_OF = 3;
-}
-
-message AccessPolicy {
-  AccessPolicyType policy_type = 1;
-  repeated string scopes = 2;
-}
-
-extend google.protobuf.MethodOptions {
-  AccessPolicy policy = 50030;
-}
-`
-
-const goTypeOptionsProtoSource = `
-syntax = "proto3";
-
-package cp.go;
-
-import "google/protobuf/descriptor.proto";
-
-extend google.protobuf.FieldOptions {
-  string type = 50010;
-  bool encode = 50012;
-  bool ignore = 50014;
-}
-
-extend google.protobuf.MethodOptions {
-  bool custom = 50013;
-}
-`
-
-const jsTypeOptionsProtoSource = `
-syntax = "proto3";
-
-package cp.js;
-
-import "google/protobuf/descriptor.proto";
-
-extend google.protobuf.FieldOptions {
-  string type = 50011;
-  bool encode = 50013;
-  bool ignore = 50015;
-}
-`
-
-const tsTypeOptionsProtoSource = `
-syntax = "proto3";
-
-package cp.ts;
-
-import "google/protobuf/descriptor.proto";
-
-extend google.protobuf.FieldOptions {
-  string type = 50016;
-  bool encode = 50017;
-  bool ignore = 50018;
-}
-`
-
-var E_GoType = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*string)(nil),
-	Field:         50010,
-	Name:          "cp.go.type",
-	Tag:           "bytes,50010,opt,name=type",
-	Filename:      goTypeOptionsProtoPath,
-}
-
-var E_JsType = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*string)(nil),
-	Field:         50011,
-	Name:          "cp.js.type",
-	Tag:           "bytes,50011,opt,name=type",
-	Filename:      jsTypeOptionsProtoPath,
-}
-
-var E_GoEncode = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*bool)(nil),
-	Field:         50012,
-	Name:          "cp.go.encode",
-	Tag:           "varint,50012,opt,name=encode",
-	Filename:      goTypeOptionsProtoPath,
-}
-
-var E_JsEncode = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*bool)(nil),
-	Field:         50013,
-	Name:          "cp.js.encode",
-	Tag:           "varint,50013,opt,name=encode",
-	Filename:      jsTypeOptionsProtoPath,
-}
-
-var E_GoIgnore = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*bool)(nil),
-	Field:         50014,
-	Name:          "cp.go.ignore",
-	Tag:           "varint,50014,opt,name=ignore",
-	Filename:      goTypeOptionsProtoPath,
-}
-
-var E_JsIgnore = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*bool)(nil),
-	Field:         50015,
-	Name:          "cp.js.ignore",
-	Tag:           "varint,50015,opt,name=ignore",
-	Filename:      jsTypeOptionsProtoPath,
-}
-
-var E_TsType = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*string)(nil),
-	Field:         50016,
-	Name:          "cp.ts.type",
-	Tag:           "bytes,50016,opt,name=type",
-	Filename:      tsTypeOptionsProtoPath,
-}
-
-var E_TsEncode = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*bool)(nil),
-	Field:         50017,
-	Name:          "cp.ts.encode",
-	Tag:           "varint,50017,opt,name=encode",
-	Filename:      tsTypeOptionsProtoPath,
-}
-
-var E_TsIgnore = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-	ExtensionType: (*bool)(nil),
-	Field:         50018,
-	Name:          "cp.ts.ignore",
-	Tag:           "varint,50018,opt,name=ignore",
-	Filename:      tsTypeOptionsProtoPath,
-}
-
-var E_GoCustom = &protoimpl.ExtensionInfo{
-	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
-	ExtensionType: (*bool)(nil),
-	Field:         50013,
-	Name:          "cp.go.custom",
-	Tag:           "varint,50013,opt,name=custom",
-	Filename:      goTypeOptionsProtoPath,
-}
+var E_GoType = cp.E_GoType
+var E_JsType = cp.E_JsType
+var E_GoEncode = cp.E_GoEncode
+var E_JsEncode = cp.E_JsEncode
+var E_GoIgnore = cp.E_GoIgnore
+var E_JsIgnore = cp.E_JsIgnore
+var E_TsType = cp.E_TsType
+var E_TsEncode = cp.E_TsEncode
+var E_TsIgnore = cp.E_TsIgnore
+var E_GoCustom = cp.E_GoCustom
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)

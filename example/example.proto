@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package example;
 
-import "cleanproto/options.proto";
+import "options.proto";
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
 
@@ -21,40 +21,40 @@ message Library {
 }
 
 message NativeTypeCoverage {
-  int32 go_time_from_int32 = 1 [(cp.go.type) = "time.Time"];
-  int64 go_time_from_int64 = 2 [(cp.go.type) = "time.Time"];
-  google.protobuf.Timestamp go_time_from_timestamp = 3 [(cp.go.type) = "time.Time"];
+  int32 go_time_from_int32 = 1 [(cp.go_type) = "time.Time"];
+  int64 go_time_from_int64 = 2 [(cp.go_type) = "time.Time"];
+  google.protobuf.Timestamp go_time_from_timestamp = 3 [(cp.go_type) = "time.Time"];
 
-  int32 go_duration_from_int32 = 4 [(cp.go.type) = "time.Duration"];
-  int64 go_duration_from_int64 = 5 [(cp.go.type) = "time.Duration"];
-  google.protobuf.Duration go_duration_from_duration = 6 [(cp.go.type) = "time.Duration"];
+  int32 go_duration_from_int32 = 4 [(cp.go_type) = "time.Duration"];
+  int64 go_duration_from_int64 = 5 [(cp.go_type) = "time.Duration"];
+  google.protobuf.Duration go_duration_from_duration = 6 [(cp.go_type) = "time.Duration"];
 
-  bytes go_uuid_from_bytes = 7 [(cp.go.type) = "github.com/google/uuid.UUID"];
+  bytes go_uuid_from_bytes = 7 [(cp.go_type) = "github.com/google/uuid.UUID"];
 
-  int32 js_number_from_int32 = 8 [(cp.js.type) = "number"];
-  int32 js_bigint_from_int32 = 9 [(cp.js.type) = "bigint"];
-  int64 js_number_from_int64 = 10 [(cp.js.type) = "number"];
-  int64 js_bigint_from_int64 = 11 [(cp.js.type) = "bigint"];
+  int32 js_number_from_int32 = 8 [(cp.js_type) = "number"];
+  int32 js_bigint_from_int32 = 9 [(cp.js_type) = "bigint"];
+  int64 js_number_from_int64 = 10 [(cp.js_type) = "number"];
+  int64 js_bigint_from_int64 = 11 [(cp.js_type) = "bigint"];
 
-  google.protobuf.Timestamp js_number_from_timestamp = 12 [(cp.js.type) = "number"];
-  google.protobuf.Timestamp js_bigint_from_timestamp = 13 [(cp.js.type) = "bigint"];
+  google.protobuf.Timestamp js_number_from_timestamp = 12 [(cp.js_type) = "number"];
+  google.protobuf.Timestamp js_bigint_from_timestamp = 13 [(cp.js_type) = "bigint"];
 
-  google.protobuf.Duration js_number_from_duration = 14 [(cp.js.type) = "number"];
-  google.protobuf.Duration js_bigint_from_duration = 15 [(cp.js.type) = "bigint"];
+  google.protobuf.Duration js_number_from_duration = 14 [(cp.js_type) = "number"];
+  google.protobuf.Duration js_bigint_from_duration = 15 [(cp.js_type) = "bigint"];
 
-  int32 go_encode_false = 16 [(cp.go.encode) = false];
-  int32 go_ignore_true = 17 [(cp.go.ignore) = true];
-  int32 js_encode_false = 18 [(cp.js.encode) = false];
-  int32 js_ignore_true = 19 [(cp.js.ignore) = true];
+  int32 go_encode_false = 16 [(cp.go_encode) = false];
+  int32 go_ignore_true = 17 [(cp.go_ignore) = true];
+  int32 js_encode_false = 18 [(cp.js_encode) = false];
+  int32 js_ignore_true = 19 [(cp.js_ignore) = true];
 
-  int32 js_date_from_int32 = 20 [(cp.js.type) = "Date"];
-  int64 js_date_from_int64 = 21 [(cp.js.type) = "Date"];
-  google.protobuf.Timestamp js_date_from_timestamp = 22 [(cp.js.type) = "Date"];
+  int32 js_date_from_int32 = 20 [(cp.js_type) = "Date"];
+  int64 js_date_from_int64 = 21 [(cp.js_type) = "Date"];
+  google.protobuf.Timestamp js_date_from_timestamp = 22 [(cp.js_type) = "Date"];
 
   int64 ts_default_bigint_from_int64 = 23;
-  int64 ts_number_from_int64 = 24 [(cp.ts.type) = "number"];
-  int32 ts_bigint_from_int32 = 25 [(cp.ts.type) = "bigint"];
-  google.protobuf.Timestamp ts_date_from_timestamp = 26 [(cp.ts.type) = "Date"];
-  int32 ts_encode_false = 27 [(cp.ts.encode) = false];
-  int32 ts_ignore_true = 28 [(cp.ts.ignore) = true];
+  int64 ts_number_from_int64 = 24 [(cp.ts_type) = "number"];
+  int32 ts_bigint_from_int32 = 25 [(cp.ts_type) = "bigint"];
+  google.protobuf.Timestamp ts_date_from_timestamp = 26 [(cp.ts_type) = "Date"];
+  int32 ts_encode_false = 27 [(cp.ts_encode) = false];
+  int32 ts_ignore_true = 28 [(cp.ts_ignore) = true];
 }

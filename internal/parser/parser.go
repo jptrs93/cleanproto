@@ -21,17 +21,8 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 	resolver := &protocompile.SourceResolver{
 		ImportPaths: p.ImportPaths,
 		Accessor: func(path string) (io.ReadCloser, error) {
-			if path == optionsProtoPath || strings.HasSuffix(path, string(os.PathSeparator)+optionsProtoPath) {
+			if path == optionsProtoPath {
 				return io.NopCloser(strings.NewReader(optionsProtoSource)), nil
-			}
-			if path == goTypeOptionsProtoPath || strings.HasSuffix(path, string(os.PathSeparator)+goTypeOptionsProtoPath) {
-				return io.NopCloser(strings.NewReader(goTypeOptionsProtoSource)), nil
-			}
-			if path == jsTypeOptionsProtoPath || strings.HasSuffix(path, string(os.PathSeparator)+jsTypeOptionsProtoPath) {
-				return io.NopCloser(strings.NewReader(jsTypeOptionsProtoSource)), nil
-			}
-			if path == tsTypeOptionsProtoPath || strings.HasSuffix(path, string(os.PathSeparator)+tsTypeOptionsProtoPath) {
-				return io.NopCloser(strings.NewReader(tsTypeOptionsProtoSource)), nil
 			}
 			return os.Open(path)
 		},
@@ -324,21 +315,21 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 
 func validateNativeTypes(fullName protoreflect.FullName, kind ir.Kind, msgName string, goType string, jsType string, tsType string, isMap bool) error {
 	if isMap && (goType != "" || jsType != "" || tsType != "") {
-		return fmt.Errorf("cp.go.type/cp.js.type/cp.ts.type not supported on map fields: %s", fullName)
+		return fmt.Errorf("cp.go_type/cp.js_type/cp.ts_type not supported on map fields: %s", fullName)
 	}
 	if goType != "" {
 		if !isSupportedGoType(kind, msgName, goType) {
-			return fmt.Errorf("unsupported cp.go.type %q for %s", goType, fullName)
+			return fmt.Errorf("unsupported cp.go_type %q for %s", goType, fullName)
 		}
 	}
 	if jsType != "" {
 		if !isSupportedJSType(kind, msgName, jsType) {
-			return fmt.Errorf("unsupported cp.js.type %q for %s", jsType, fullName)
+			return fmt.Errorf("unsupported cp.js_type %q for %s", jsType, fullName)
 		}
 	}
 	if tsType != "" {
 		if !isSupportedTSType(kind, msgName, tsType) {
-			return fmt.Errorf("unsupported cp.ts.type %q for %s", tsType, fullName)
+			return fmt.Errorf("unsupported cp.ts_type %q for %s", tsType, fullName)
 		}
 	}
 	return nil

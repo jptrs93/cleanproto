@@ -973,7 +973,7 @@ func goNativeAppendFunc(field ir.Field) (string, error) {
 			return "AppendBytesFromUUID", nil
 		}
 	}
-	return "", fmt.Errorf("unsupported cp.go.type conversion for field %s", field.Name)
+	return "", fmt.Errorf("unsupported cp.go_type conversion for field %s", field.Name)
 }
 
 func goNativeConsumeFunc(field ir.Field) (string, error) {
@@ -1003,7 +1003,7 @@ func goNativeConsumeFunc(field ir.Field) (string, error) {
 			return "ConsumeUUIDFromBytes", nil
 		}
 	}
-	return "", fmt.Errorf("unsupported cp.go.type conversion for field %s", field.Name)
+	return "", fmt.Errorf("unsupported cp.go_type conversion for field %s", field.Name)
 }
 
 func goEncodeRepeatedEnum(fieldName string, field ir.Field) []string {
