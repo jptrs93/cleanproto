@@ -29,6 +29,8 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	var outputs []generate.OutputFile
 	var utilPkg string
 	var utilDir string
+	var muxUtilDir string
+	var needMuxUtil bool
 	for _, file := range files {
 		goOut := options.GoOut
 		if goOut == "" {
@@ -58,6 +60,20 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			Path:    outPath,
 			Content: buf.Bytes(),
 		})
+		if len(file.Services) > 0 {
+			needMuxUtil = true
+			if muxUtilDir == "" {
+				muxUtilDir = goOut
+			}
+			muxContent, err := buildGoMuxFile(file, msgIndex, pkg)
+			if err != nil {
+				return nil, err
+			}
+			outputs = append(outputs, generate.OutputFile{
+				Path:    filepath.Join(goOut, "mux.gen.go"),
+				Content: []byte(muxContent),
+			})
+		}
 	}
 	if len(outputs) == 0 {
 		return nil, nil
@@ -70,7 +86,311 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 		Path:    filepath.Join(utilDir, "util.gen.go"),
 		Content: utilContent,
 	})
+	if needMuxUtil {
+		muxUtilContent := []byte(strings.ReplaceAll(muxUtilSource, "__PACKAGE__", utilPkg))
+		outputs = append(outputs, generate.OutputFile{
+			Path:    filepath.Join(muxUtilDir, "mux_util.gen.go"),
+			Content: muxUtilContent,
+		})
+	}
 	return outputs, nil
+}
+
+func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (string, error) {
+	type muxMethod struct {
+		Name       string
+		Handler    string
+		HTTPMethod string
+		Path       string
+		Input      string
+		Output     string
+		GoCustom   bool
+		NoAuth     bool
+		Scopes     []string
+		PolicyType int32
+	}
+	methods := make([]muxMethod, 0)
+	for _, svc := range file.Services {
+		for _, m := range svc.Methods {
+			httpMethod, path, ok := deriveHTTPGo(m.Name)
+			if !ok {
+				continue
+			}
+			in, ok := msgIndex[m.InputFullName]
+			if !ok {
+				return "", fmt.Errorf("unknown service input type: %s", m.InputFullName)
+			}
+			out, ok := msgIndex[m.OutputFullName]
+			if !ok {
+				return "", fmt.Errorf("unknown service output type: %s", m.OutputFullName)
+			}
+			methods = append(methods, muxMethod{
+				Name:       m.Name,
+				Handler:    normalizeGoMethodName(m.Name),
+				HTTPMethod: httpMethod,
+				Path:       path,
+				Input:      in.Name,
+				Output:     out.Name,
+				GoCustom:   m.GoCustom,
+				NoAuth:     m.PolicyType == 1,
+				Scopes:     append([]string(nil), m.PolicyScopes...),
+				PolicyType: m.PolicyType,
+			})
+		}
+	}
+	if len(methods) == 0 {
+		return "", nil
+	}
+
+	var b strings.Builder
+	b.WriteString("package ")
+	b.WriteString(pkg)
+	b.WriteString("\n\n")
+	b.WriteString("import (\n")
+	b.WriteString("\t\"context\"\n")
+	b.WriteString("\t\"net/http\"\n")
+	b.WriteString(")\n\n")
+	b.WriteString("type HandlerFunc = func(context.Context, http.ResponseWriter, *http.Request)\n")
+	b.WriteString("type MiddlewareFunc func(next HandlerFunc) HandlerFunc\n\n")
+	b.WriteString("type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (context.Context, error)\n\n")
+	b.WriteString("func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.HandlerFunc {\n")
+	b.WriteString("\tfor _, m := range middlewares {\n")
+	b.WriteString("\t\th = m(h)\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\treturn func(w http.ResponseWriter, r *http.Request) {\n")
+	b.WriteString("\t\th(r.Context(), w, r)\n")
+	b.WriteString("\t}\n")
+	b.WriteString("}\n\n")
+	b.WriteString("type ServerHandler interface {\n")
+	for _, m := range methods {
+		if m.GoCustom {
+			b.WriteString("\t")
+			b.WriteString(m.Handler)
+			b.WriteString("(context.Context")
+			if m.Input != "Empty" {
+				b.WriteString(", *")
+				b.WriteString(m.Input)
+			}
+			b.WriteString(", http.ResponseWriter) error\n")
+			continue
+		}
+		b.WriteString("\t")
+		b.WriteString(m.Handler)
+		b.WriteString("(context.Context")
+		if m.Input != "Empty" {
+			b.WriteString(", *")
+			b.WriteString(m.Input)
+		}
+		if m.Output == "Empty" {
+			b.WriteString(") error\n")
+		} else {
+			b.WriteString(") (*")
+			b.WriteString(m.Output)
+			b.WriteString(", error)\n")
+		}
+	}
+	b.WriteString("}\n\n")
+	b.WriteString("func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, middlewares ...MiddlewareFunc) *http.ServeMux {\n")
+	b.WriteString("\tif verifyAuth == nil {\n")
+	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (context.Context, error) {\n")
+	b.WriteString("\t\t\treturn ctx, nil\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tm := http.NewServeMux()\n")
+	for _, m := range methods {
+		b.WriteString("\tm.HandleFunc(\"")
+		b.WriteString(m.HTTPMethod)
+		b.WriteString(" ")
+		b.WriteString(m.Path)
+		b.WriteString("\", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {\n")
+		b.WriteString("\t\t\tctx, err := verifyAuth(ctx, r, ")
+		b.WriteString(policyLiteral(m.PolicyType, m.Scopes))
+		b.WriteString(")\n")
+		b.WriteString("\t\t\tif err != nil {\n")
+		b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+		b.WriteString("\t\t\t\treturn\n")
+		b.WriteString("\t\t\t}\n")
+		if m.GoCustom {
+			if m.Input == "Empty" {
+				b.WriteString("\t\t\terr = h.")
+				b.WriteString(m.Handler)
+				b.WriteString("(ctx, w)\n")
+			} else {
+				b.WriteString("\t\t\treq, err := decodeBody(r, Decode")
+				b.WriteString(m.Input)
+				b.WriteString(")\n")
+				b.WriteString("\t\t\tif err != nil {\n")
+				b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+				b.WriteString("\t\t\t\treturn\n")
+				b.WriteString("\t\t\t}\n")
+				b.WriteString("\t\t\terr = h.")
+				b.WriteString(m.Handler)
+				b.WriteString("(ctx, req, w)\n")
+			}
+			b.WriteString("\t\t\tif err != nil {\n")
+			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+			b.WriteString("\t\t\t\treturn\n")
+			b.WriteString("\t\t\t}\n")
+			b.WriteString("\t\t}, middlewares...))\n")
+			continue
+		}
+		if m.Input != "Empty" {
+			b.WriteString("\t\t\treq, err := decodeBody(r, Decode")
+			b.WriteString(m.Input)
+			b.WriteString(")\n")
+			b.WriteString("\t\t\tif err != nil {\n")
+			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+			b.WriteString("\t\t\t\treturn\n")
+			b.WriteString("\t\t\t}\n")
+		}
+		if m.Output == "Empty" {
+			if m.Input == "Empty" {
+				b.WriteString("\t\t\terr = h.")
+				b.WriteString(m.Handler)
+				b.WriteString("(ctx)\n")
+			} else {
+				b.WriteString("\t\t\terr = h.")
+				b.WriteString(m.Handler)
+				b.WriteString("(ctx, req)\n")
+			}
+			b.WriteString("\t\t\tif err != nil {\n")
+			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+			b.WriteString("\t\t\t\treturn\n")
+			b.WriteString("\t\t\t}\n")
+			b.WriteString("\t\t\tw.WriteHeader(http.StatusNoContent)\n")
+		} else {
+			if m.Input == "Empty" {
+				b.WriteString("\t\t\tres, err := h.")
+				b.WriteString(m.Handler)
+				b.WriteString("(ctx)\n")
+			} else {
+				b.WriteString("\t\t\tres, err := h.")
+				b.WriteString(m.Handler)
+				b.WriteString("(ctx, req)\n")
+			}
+			b.WriteString("\t\t\tRespond(ctx, r, w, res, err)\n")
+		}
+		b.WriteString("\t\t}, middlewares...))\n")
+	}
+	b.WriteString("\treturn m\n")
+	b.WriteString("}\n")
+	return b.String(), nil
+}
+
+func policyLiteral(policyType int32, scopes []string) string {
+	if policyType == 1 {
+		return "AccessPolicy{PolicyType: AccessPolicyType_NO_AUTH}"
+	}
+	if policyType == 2 {
+		return "AccessPolicy{PolicyType: AccessPolicyType_OPTIONAL_AUTH}"
+	}
+	if policyType == 0 {
+		return "AccessPolicy{}"
+	}
+	var b strings.Builder
+	b.WriteString("AccessPolicy{PolicyType: AccessPolicyType_ANY_OF, Scopes: []string{")
+	for i, s := range scopes {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("\"")
+		b.WriteString(s)
+		b.WriteString("\"")
+	}
+	b.WriteString("}}")
+	return b.String()
+}
+
+func deriveHTTPGo(name string) (method string, path string, ok bool) {
+	prefixes := []string{"Get", "Post", "Put", "Patch", "Delete"}
+	method = ""
+	rest := ""
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			method = strings.ToUpper(p)
+			rest = strings.TrimPrefix(name, p)
+			break
+		}
+	}
+	if method == "" || rest == "" {
+		if name == "Get" {
+			return "GET", "/", true
+		}
+		return "", "", false
+	}
+	if rest == "Root" {
+		return method, "/", true
+	}
+	version := ""
+	if strings.HasSuffix(rest, "V1") {
+		rest = strings.TrimSuffix(rest, "V1")
+		version = "v1"
+	}
+	parts := strings.Split(rest, "_")
+	first := goCamelWords(parts[0])
+	if len(first) == 0 {
+		return "", "", false
+	}
+	base := "/"
+	if version != "" {
+		base += version
+		if len(first) > 0 {
+			base += "/"
+		}
+	}
+	base += strings.Join(first, "/")
+	if len(parts) == 1 {
+		return method, base, true
+	}
+	for _, seg := range parts[1:] {
+		words := goCamelWords(seg)
+		if len(words) == 0 {
+			continue
+		}
+		base += "-" + strings.Join(words, "-")
+	}
+	return method, base, true
+}
+
+func goCamelWords(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	var b strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		if i > 0 {
+			prev := runes[i-1]
+			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+			if unicode.IsUpper(r) && (unicode.IsLower(prev) || (unicode.IsUpper(prev) && nextLower) || unicode.IsDigit(prev)) {
+				out = append(out, strings.ToLower(b.String()))
+				b.Reset()
+			}
+		}
+		b.WriteRune(r)
+	}
+	if b.Len() > 0 {
+		out = append(out, strings.ToLower(b.String()))
+	}
+	return out
+}
+
+func normalizeGoMethodName(name string) string {
+	if name == "" {
+		return name
+	}
+	parts := strings.Split(name, "_")
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		r := []rune(p)
+		r[0] = unicode.ToUpper(r[0])
+		b.WriteString(string(r))
+	}
+	return b.String()
 }
 
 type goFileData struct {
@@ -1600,6 +1920,72 @@ func loadUtilSource(pkg string) ([]byte, error) {
 	updated += "\n\n" + utilExtra
 	return []byte(updated), nil
 }
+
+const muxUtilSource = `package __PACKAGE__
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+)
+
+func Respond(ctx context.Context, r *http.Request, w http.ResponseWriter, res Encodable, resultErr error) {
+	if resultErr != nil {
+		HandleReqErr(ctx, resultErr, r, w)
+		return
+	}
+	if res != nil {
+		w.Header().Set("Content-Type", "application/protobuf")
+		RespondWithStatus(ctx, w, res.Encode(), http.StatusOK)
+		return
+	}
+	RespondWithStatus(ctx, w, nil, http.StatusOK)
+}
+
+func RespondWithStatus(ctx context.Context, w http.ResponseWriter, b []byte, code int) {
+	w.WriteHeader(code)
+	if len(b) == 0 {
+		return
+	}
+	if _, err := w.Write(b); err != nil {
+		slog.ErrorContext(ctx, fmt.Sprintf("writing response body: %v", err))
+	}
+}
+
+func HandleReqErr(ctx context.Context, err error, r *http.Request, w http.ResponseWriter) {
+	if err != nil && len(err.Error()) > 0 {
+		slog.ErrorContext(ctx, fmt.Sprintf("%v err: %v", r.URL.Path, err.Error()))
+	}
+	var httpErr ApiErr
+	if !errors.As(err, &httpErr) {
+		httpErr = ApiErr{DisplayErr: "Unknown server error", Code: http.StatusInternalServerError}
+	}
+	w.Header().Set("Content-Type", "application/protobuf")
+	RespondWithStatus(ctx, w, httpErr.Encode(), int(httpErr.Code))
+}
+
+func decodeBody[T any](r *http.Request, decode func([]byte) (*T, error)) (*T, error) {
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
+	}
+	return decode(b)
+}
+
+func NewApiErr(displayErr string, internalErr string, code int32) ApiErr {
+	return ApiErr{DisplayErr: displayErr, InternalErr: internalErr, Code: code}
+}
+
+func (e ApiErr) Error() string {
+	if e.InternalErr != "" {
+		return e.InternalErr
+	}
+	return e.DisplayErr
+}
+`
 
 const utilExtra = `
 func EncodeTimestamp(t time.Time) []byte {

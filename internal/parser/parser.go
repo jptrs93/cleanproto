@@ -83,7 +83,43 @@ func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
 	out.Enums = append(out.Enums, enums...)
 	out.Enums = append(out.Enums, nestedEnums...)
 	out.Messages = msgs
+	services, err := collectServices(file.Services())
+	if err != nil {
+		return ir.File{}, err
+	}
+	out.Services = services
 	return out, nil
+}
+
+func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, error) {
+	result := make([]ir.Service, 0, services.Len())
+	for i := 0; i < services.Len(); i++ {
+		svc := services.Get(i)
+		outSvc := ir.Service{Name: string(svc.Name())}
+		methods := make([]ir.Method, 0, svc.Methods().Len())
+		for j := 0; j < svc.Methods().Len(); j++ {
+			m := svc.Methods().Get(j)
+			goCustom, err := goCustomFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
+			policyType, policyScopes, err := policyFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
+			methods = append(methods, ir.Method{
+				Name:           string(m.Name()),
+				InputFullName:  string(m.Input().FullName()),
+				OutputFullName: string(m.Output().FullName()),
+				GoCustom:       goCustom,
+				PolicyType:     policyType,
+				PolicyScopes:   policyScopes,
+			})
+		}
+		outSvc.Methods = methods
+		result = append(result, outSvc)
+	}
+	return result, nil
 }
 
 func collectMessages(messages protoreflect.MessageDescriptors, prefix []string) ([]ir.Message, error) {

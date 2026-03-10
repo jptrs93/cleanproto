@@ -3,6 +3,7 @@ package parser
 import (
 	"strings"
 
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/runtime/protoimpl"
@@ -17,11 +18,28 @@ const tsTypeOptionsProtoPath = "cp/ts/options.proto"
 const optionsProtoSource = `
 syntax = "proto3";
 
-package cleanproto;
+package cp;
 
+import "google/protobuf/descriptor.proto";
 import public "cp/go/options.proto";
 import public "cp/js/options.proto";
 import public "cp/ts/options.proto";
+
+enum AccessPolicyType {
+  ACCESS_POLICY_TYPE_UNSPECIFIED = 0;
+  NO_AUTH = 1;
+  OPTIONAL_AUTH = 2;
+  ANY_OF = 3;
+}
+
+message AccessPolicy {
+  AccessPolicyType policy_type = 1;
+  repeated string scopes = 2;
+}
+
+extend google.protobuf.MethodOptions {
+  AccessPolicy policy = 50030;
+}
 `
 
 const goTypeOptionsProtoSource = `
@@ -35,6 +53,10 @@ extend google.protobuf.FieldOptions {
   string type = 50010;
   bool encode = 50012;
   bool ignore = 50014;
+}
+
+extend google.protobuf.MethodOptions {
+  bool custom = 50013;
 }
 `
 
@@ -145,6 +167,15 @@ var E_TsIgnore = &protoimpl.ExtensionInfo{
 	Name:          "cp.ts.ignore",
 	Tag:           "varint,50018,opt,name=ignore",
 	Filename:      tsTypeOptionsProtoPath,
+}
+
+var E_GoCustom = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50013,
+	Name:          "cp.go.custom",
+	Tag:           "varint,50013,opt,name=custom",
+	Filename:      goTypeOptionsProtoPath,
 }
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
@@ -271,6 +302,118 @@ func tsIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) 
 		return false, nil
 	}
 	return b, nil
+}
+
+func goCustomFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) {
+	opts, ok := method.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return false, nil
+	}
+	if !proto.HasExtension(opts, E_GoCustom) {
+		return false, nil
+	}
+	val := proto.GetExtension(opts, E_GoCustom)
+	b, ok := val.(bool)
+	if !ok {
+		return false, nil
+	}
+	return b, nil
+}
+
+func policyFromMethodOptions(method protoreflect.MethodDescriptor) (int32, []string, error) {
+	opts, ok := method.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return 0, nil, nil
+	}
+	var policyType int32
+	var scopes []string
+	found := false
+	opts.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		if !fd.IsExtension() || fd.Number() != 50030 {
+			return true
+		}
+		found = true
+		msg := v.Message()
+		md := msg.Descriptor()
+		if pf := md.Fields().ByName("policy_type"); pf != nil && msg.Has(pf) {
+			policyType = int32(msg.Get(pf).Enum())
+		}
+		if sf := md.Fields().ByName("scopes"); sf != nil && msg.Has(sf) {
+			list := msg.Get(sf).List()
+			for i := 0; i < list.Len(); i++ {
+				scopes = append(scopes, list.Get(i).String())
+			}
+		}
+		return false
+	})
+	if found {
+		return policyType, scopes, nil
+	}
+	unknown := opts.ProtoReflect().GetUnknown()
+	for len(unknown) > 0 {
+		num, typ, n := protowire.ConsumeTag(unknown)
+		if n < 0 {
+			return 0, nil, protowire.ParseError(n)
+		}
+		unknown = unknown[n:]
+		if num != 50030 {
+			m := protowire.ConsumeFieldValue(num, typ, unknown)
+			if m < 0 {
+				return 0, nil, protowire.ParseError(m)
+			}
+			unknown = unknown[m:]
+			continue
+		}
+		if typ != protowire.BytesType {
+			m := protowire.ConsumeFieldValue(num, typ, unknown)
+			if m < 0 {
+				return 0, nil, protowire.ParseError(m)
+			}
+			unknown = unknown[m:]
+			continue
+		}
+		value, m := protowire.ConsumeBytes(unknown)
+		if m < 0 {
+			return 0, nil, protowire.ParseError(m)
+		}
+		return parsePolicyBytes(value)
+	}
+	return 0, nil, nil
+}
+
+func parsePolicyBytes(value []byte) (int32, []string, error) {
+	policyType := int32(0)
+	var scopes []string
+	for len(value) > 0 {
+		fnum, ftyp, fn := protowire.ConsumeTag(value)
+		if fn < 0 {
+			return 0, nil, protowire.ParseError(fn)
+		}
+		value = value[fn:]
+		switch {
+		case fnum == 1 && ftyp == protowire.VarintType:
+			v, vn := protowire.ConsumeVarint(value)
+			if vn < 0 {
+				return 0, nil, protowire.ParseError(vn)
+			}
+			policyType = int32(v)
+			value = value[vn:]
+		case fnum == 2 && ftyp == protowire.BytesType:
+			s, sn := protowire.ConsumeString(value)
+			if sn < 0 {
+				return 0, nil, protowire.ParseError(sn)
+			}
+			scopes = append(scopes, s)
+			value = value[sn:]
+		default:
+			sn := protowire.ConsumeFieldValue(fnum, ftyp, value)
+			if sn < 0 {
+				return 0, nil, protowire.ParseError(sn)
+			}
+			value = value[sn:]
+		}
+	}
+	return policyType, scopes, nil
 }
 
 func goPackageFromOptions(file protoreflect.FileDescriptor) string {

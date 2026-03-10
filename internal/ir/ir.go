@@ -6,6 +6,21 @@ type File struct {
 	GoPackage string
 	Enums     []Enum
 	Messages  []Message
+	Services  []Service
+}
+
+type Service struct {
+	Name    string
+	Methods []Method
+}
+
+type Method struct {
+	Name           string
+	InputFullName  string
+	OutputFullName string
+	GoCustom       bool
+	PolicyType     int32
+	PolicyScopes   []string
 }
 
 type Enum struct {

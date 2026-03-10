@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/template"
+	"unicode"
 
 	"github.com/jptrs93/cleanproto/internal/generate"
 	"github.com/jptrs93/cleanproto/internal/generate/templates"
@@ -43,8 +45,239 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			Path:    outPath,
 			Content: buf.Bytes(),
 		})
+		if len(file.Services) > 0 {
+			capi, err := buildTSCapiFile(file, msgIndex)
+			if err != nil {
+				return nil, err
+			}
+			outputs = append(outputs, generate.OutputFile{
+				Path:    filepath.Join(tsOut, "capi.ts"),
+				Content: []byte(capi),
+			})
+		}
 	}
 	return outputs, nil
+}
+
+func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, error) {
+	type capiMethod struct {
+		Name       string
+		Path       string
+		HTTPMethod string
+		InputType  string
+		OutputType string
+	}
+	methods := make([]capiMethod, 0)
+	decodeImports := map[string]struct{}{}
+	encodeImports := map[string]struct{}{}
+	typeImports := map[string]struct{}{}
+	for _, svc := range file.Services {
+		for _, m := range svc.Methods {
+			httpMethod, path, ok := deriveHTTP(m.Name)
+			if !ok {
+				continue
+			}
+			inType, ok := messageNameByFullName(msgIndex, m.InputFullName)
+			if !ok {
+				return "", fmt.Errorf("unknown method input type: %s", m.InputFullName)
+			}
+			outType, ok := messageNameByFullName(msgIndex, m.OutputFullName)
+			if !ok {
+				return "", fmt.Errorf("unknown method output type: %s", m.OutputFullName)
+			}
+			cm := capiMethod{
+				Name:       lowerFirst(m.Name),
+				Path:       path,
+				HTTPMethod: httpMethod,
+				InputType:  inType,
+				OutputType: outType,
+			}
+			if inType != "Empty" {
+				encodeImports["encode"+inType] = struct{}{}
+				typeImports[inType] = struct{}{}
+			}
+			if outType != "Empty" {
+				decodeImports["decode"+outType] = struct{}{}
+				typeImports[outType] = struct{}{}
+			}
+			methods = append(methods, cm)
+		}
+	}
+	if len(methods) == 0 {
+		return "", nil
+	}
+	var b strings.Builder
+	b.WriteString("import {\n")
+	imports := make([]string, 0, len(decodeImports)+len(encodeImports))
+	for name := range decodeImports {
+		imports = append(imports, name)
+	}
+	for name := range encodeImports {
+		imports = append(imports, name)
+	}
+	sort.Strings(imports)
+	for _, name := range imports {
+		b.WriteString("  ")
+		b.WriteString(name)
+		b.WriteString(",\n")
+	}
+	b.WriteString("} from './model';\n")
+	if len(typeImports) > 0 {
+		types := make([]string, 0, len(typeImports))
+		for name := range typeImports {
+			types = append(types, name)
+		}
+		sort.Strings(types)
+		b.WriteString("import type {\n")
+		for _, name := range types {
+			b.WriteString("  ")
+			b.WriteString(name)
+			b.WriteString(",\n")
+		}
+		b.WriteString("} from './model';\n\n")
+	}
+	b.WriteString("type HeaderProvider = () => Record<string, string>;\n")
+	b.WriteString("type RequestBody = BodyInit | Uint8Array<ArrayBufferLike>;\n\n")
+	b.WriteString("export class Capi {\n")
+	b.WriteString("  baseURL: string;\n")
+	b.WriteString("  headerProvider: HeaderProvider;\n\n")
+	b.WriteString("  constructor(baseURL = '', headerProvider: HeaderProvider | null = null) {\n")
+	b.WriteString("    this.baseURL = baseURL;\n")
+	b.WriteString("    this.headerProvider = headerProvider == null ? () => ({}) : headerProvider;\n")
+	b.WriteString("  }\n\n")
+	b.WriteString("  async #request(path: string, { method = 'GET', body }: { method?: string; body?: RequestBody } = {}): Promise<Response> {\n")
+	b.WriteString("    const headers = this.headerProvider() || {};\n")
+	b.WriteString("    headers['Accept'] = 'application/x-protobuf';\n")
+	b.WriteString("    if (body !== undefined) {\n")
+	b.WriteString("      headers['Content-Type'] = 'application/x-protobuf';\n")
+	b.WriteString("    }\n")
+	b.WriteString("    return fetch(`${this.baseURL}${path}`, { method, headers, body, credentials: 'include' });\n")
+	b.WriteString("  }\n\n")
+	for _, m := range methods {
+		b.WriteString("  async ")
+		b.WriteString(m.Name)
+		if m.InputType == "Empty" {
+			if m.OutputType == "Empty" {
+				b.WriteString("(): Promise<void> {\n")
+			} else {
+				b.WriteString("(): Promise<")
+				b.WriteString(m.OutputType)
+				b.WriteString("> {\n")
+			}
+			b.WriteString("    const response = await this.#request('")
+			b.WriteString(m.Path)
+			b.WriteString("', { method: '")
+			b.WriteString(m.HTTPMethod)
+			b.WriteString("' });\n")
+		} else {
+			if m.OutputType == "Empty" {
+				b.WriteString("(payload: ")
+				b.WriteString(m.InputType)
+				b.WriteString("): Promise<void> {\n")
+			} else {
+				b.WriteString("(payload: ")
+				b.WriteString(m.InputType)
+				b.WriteString("): Promise<")
+				b.WriteString(m.OutputType)
+				b.WriteString("> {\n")
+			}
+			b.WriteString("    const response = await this.#request('")
+			b.WriteString(m.Path)
+			b.WriteString("', { method: '")
+			b.WriteString(m.HTTPMethod)
+			b.WriteString("', body: encode")
+			b.WriteString(m.InputType)
+			b.WriteString("(payload) });\n")
+		}
+		if m.OutputType == "Empty" {
+			b.WriteString("    await response.arrayBuffer();\n")
+			b.WriteString("  }\n\n")
+			continue
+		}
+		b.WriteString("    return decode")
+		b.WriteString(m.OutputType)
+		b.WriteString("(await response.arrayBuffer());\n")
+		b.WriteString("  }\n\n")
+	}
+	b.WriteString("}\n")
+	return b.String(), nil
+}
+
+func messageNameByFullName(msgIndex map[string]ir.Message, full string) (string, bool) {
+	msg, ok := msgIndex[full]
+	if !ok {
+		return "", false
+	}
+	return msg.Name, true
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToLower(r[0])
+	return string(r)
+}
+
+func deriveHTTP(name string) (method string, path string, ok bool) {
+	prefixes := []string{"Get", "Post", "Put", "Patch", "Delete"}
+	method = ""
+	rest := ""
+	for _, p := range prefixes {
+		if strings.HasPrefix(name, p) {
+			method = strings.ToUpper(p)
+			rest = strings.TrimPrefix(name, p)
+			break
+		}
+	}
+	if method == "" || rest == "" {
+		return "", "", false
+	}
+	underscoreParts := strings.Split(rest, "_")
+	if len(underscoreParts) == 0 {
+		return "", "", false
+	}
+	first := camelWords(underscoreParts[0])
+	if len(first) == 0 {
+		return "", "", false
+	}
+	base := "/" + strings.Join(first, "/")
+	if len(underscoreParts) == 1 {
+		return method, base, true
+	}
+	for _, seg := range underscoreParts[1:] {
+		words := camelWords(seg)
+		if len(words) == 0 {
+			continue
+		}
+		base += "-" + strings.Join(words, "-")
+	}
+	return method, base, true
+}
+
+func camelWords(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	var b strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		if i > 0 {
+			prev := runes[i-1]
+			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
+			if unicode.IsUpper(r) && (unicode.IsLower(prev) || (unicode.IsUpper(prev) && nextLower) || unicode.IsDigit(prev)) {
+				out = append(out, strings.ToLower(b.String()))
+				b.Reset()
+			}
+		}
+		b.WriteRune(r)
+	}
+	if b.Len() > 0 {
+		out = append(out, strings.ToLower(b.String()))
+	}
+	return out
 }
 
 type tsFileData struct {
