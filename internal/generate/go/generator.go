@@ -120,11 +120,19 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			}
 			in, ok := msgIndex[m.InputFullName]
 			if !ok {
-				return "", fmt.Errorf("unknown service input type: %s", m.InputFullName)
+				if strings.HasSuffix(m.InputFullName, ".Empty") {
+					in = ir.Message{Name: "Empty", FullName: m.InputFullName}
+				} else {
+					return "", fmt.Errorf("unknown service input type: %s", m.InputFullName)
+				}
 			}
 			out, ok := msgIndex[m.OutputFullName]
 			if !ok {
-				return "", fmt.Errorf("unknown service output type: %s", m.OutputFullName)
+				if strings.HasSuffix(m.OutputFullName, ".Empty") {
+					out = ir.Message{Name: "Empty", FullName: m.OutputFullName}
+				} else {
+					return "", fmt.Errorf("unknown service output type: %s", m.OutputFullName)
+				}
 			}
 			methods = append(methods, muxMethod{
 				Name:       m.Name,

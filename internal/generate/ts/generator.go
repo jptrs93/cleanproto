@@ -206,6 +206,9 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 func messageNameByFullName(msgIndex map[string]ir.Message, full string) (string, bool) {
 	msg, ok := msgIndex[full]
 	if !ok {
+		if strings.HasSuffix(full, ".Empty") {
+			return "Empty", true
+		}
 		return "", false
 	}
 	return msg.Name, true
