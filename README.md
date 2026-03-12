@@ -68,7 +68,7 @@ Will generate models where the `timestamp` field has the type `Date` and `time.T
 | `cp.ts_type = "bigint"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
 
 > [!NOTE]
-> Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native JavaScript type is `Date` but the wire type is `int32`, then values are converted to and from epoch seconds to fit `int32` precision.
+> Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native JavaScript type is `Date` but the wire type is `int32`, then values are converted to and from epoch seconds to fit `int32` precision. With `int64`, `Date`/`time.Time` values are converted to and from epoch milliseconds.
 
 ### Additional options
 
