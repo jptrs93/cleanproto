@@ -116,8 +116,6 @@ cleanproto \
   audit.proto
 ```
 
-Example Go output (`gen/go/model.gen.go`):
-
 <details>
 <summary>Show Go output</summary>
 
@@ -180,24 +178,9 @@ func DecodeAuditEvent(b []byte) (*AuditEvent, error) {
 	}
 	return &m, nil
 }
-
-type ApiErr struct {
-	Code        int32
-	DisplayErr  string
-	InternalErr string
-}
-
-func (m *ApiErr) Encode() []byte {
-	var b []byte
-	b = AppendInt32Field(b, m.Code, 1)
-	b = AppendStringField(b, m.DisplayErr, 2)
-	return b
-}
 ```
 
 </details>
-
-Example JS output (`gen/js/model.js`):
 
 <details>
 <summary>Show JavaScript output</summary>
@@ -300,8 +283,6 @@ export function writeApiErr(message, writer) {
 ```
 
 </details>
-
-Example TS output (`gen/ts/model.ts`):
 
 <details>
 <summary>Show TypeScript output</summary>
