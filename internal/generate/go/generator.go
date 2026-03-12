@@ -892,7 +892,7 @@ func goNativeRawValueExpr(field ir.Field, name string) string {
 }
 
 func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
-	consumeFunc, err := goNativeConsumeFunc(field)
+	consumeFunc, err := goNativeConsumeFunc(field, field.IsOptional && !field.IsRepeated)
 	if err != nil {
 		return nil, err
 	}
@@ -928,15 +928,7 @@ func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
 		lines = append(lines, "}")
 		return lines, nil
 	}
-	lines = append(lines, "var item "+nativeType)
-	lines = append(lines, "b, item, err = "+consumeFunc+"(b, typ)")
-	lines = append(lines, "if err == nil {")
-	if field.IsOptional {
-		lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
-	} else {
-		lines = append(lines, fmt.Sprintf("%s = item", fieldName))
-	}
-	lines = append(lines, "}")
+	lines = append(lines, fmt.Sprintf("b, %s, err = %s(b, typ)", fieldName, consumeFunc))
 	return lines, nil
 }
 
@@ -981,34 +973,48 @@ func goNativeAppendFunc(field ir.Field) (string, error) {
 	return "", fmt.Errorf("unsupported cp.go_type conversion for field %s", field.Name)
 }
 
-func goNativeConsumeFunc(field ir.Field) (string, error) {
+func goNativeConsumeFunc(field ir.Field, optional bool) (string, error) {
+	var consumeFunc string
 	switch field.GoType {
 	case "time.Time":
 		if field.IsTimestamp {
-			return "ConsumeTimeFromTimestamp", nil
+			consumeFunc = "ConsumeTimeFromTimestamp"
+			break
 		}
 		if field.Kind == ir.KindInt32 {
-			return "ConsumeTimeFromInt32", nil
+			consumeFunc = "ConsumeTimeFromInt32"
+			break
 		}
 		if field.Kind == ir.KindInt64 {
-			return "ConsumeTimeFromInt64", nil
+			consumeFunc = "ConsumeTimeFromInt64"
+			break
 		}
 	case "time.Duration":
 		if field.IsDuration {
-			return "ConsumeDurationFromDuration", nil
+			consumeFunc = "ConsumeDurationFromDuration"
+			break
 		}
 		if field.Kind == ir.KindInt32 {
-			return "ConsumeDurationFromInt32", nil
+			consumeFunc = "ConsumeDurationFromInt32"
+			break
 		}
 		if field.Kind == ir.KindInt64 {
-			return "ConsumeDurationFromInt64", nil
+			consumeFunc = "ConsumeDurationFromInt64"
+			break
 		}
 	case "github.com/google/uuid.UUID":
 		if field.Kind == ir.KindBytes {
-			return "ConsumeUUIDFromBytes", nil
+			consumeFunc = "ConsumeUUIDFromBytes"
+			break
 		}
 	}
-	return "", fmt.Errorf("unsupported cp.go_type conversion for field %s", field.Name)
+	if consumeFunc == "" {
+		return "", fmt.Errorf("unsupported cp.go_type conversion for field %s", field.Name)
+	}
+	if optional {
+		return consumeFunc + "Opt", nil
+	}
+	return consumeFunc, nil
 }
 
 func goEncodeRepeatedEnum(fieldName string, field ir.Field) []string {
@@ -1693,16 +1699,11 @@ func goDecodeTimestamp(fieldName string, field ir.Field) ([]string, bool, error)
 		lines = append(lines, "}")
 		return lines, false, nil
 	}
-
-	lines = append(lines, "var item time.Time")
-	lines = append(lines, "b, item, err = ConsumeTimeFromTimestamp(b, typ)")
-	lines = append(lines, "if err == nil {")
+	consumeFunc := "ConsumeTimeFromTimestamp"
 	if field.IsOptional {
-		lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
-	} else {
-		lines = append(lines, fmt.Sprintf("%s = item", fieldName))
+		consumeFunc = "ConsumeTimeFromTimestampOpt"
 	}
-	lines = append(lines, "}")
+	lines = append(lines, fmt.Sprintf("b, %s, err = %s(b, typ)", fieldName, consumeFunc))
 	return lines, false, nil
 }
 
@@ -1716,16 +1717,11 @@ func goDecodeDuration(fieldName string, field ir.Field) ([]string, error) {
 		lines = append(lines, "}")
 		return lines, nil
 	}
-
-	lines = append(lines, "var item time.Duration")
-	lines = append(lines, "b, item, err = ConsumeDuration(b, typ)")
-	lines = append(lines, "if err == nil {")
+	consumeFunc := "ConsumeDuration"
 	if field.IsOptional {
-		lines = append(lines, fmt.Sprintf("%s = &item", fieldName))
-	} else {
-		lines = append(lines, fmt.Sprintf("%s = item", fieldName))
+		consumeFunc = "ConsumeDurationOpt"
 	}
-	lines = append(lines, "}")
+	lines = append(lines, fmt.Sprintf("b, %s, err = %s(b, typ)", fieldName, consumeFunc))
 	return lines, nil
 }
 
@@ -2091,6 +2087,16 @@ func ConsumeTimeFromTimestamp(b []byte, typ protowire.Type) ([]byte, time.Time, 
 	return ConsumeTimestamp(b, typ)
 }
 
+func ConsumeTimeFromTimestampOpt(b []byte, typ protowire.Type) ([]byte, *time.Time, error) {
+	var v time.Time
+	var err error
+	b, v, err = ConsumeTimeFromTimestamp(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
 func ConsumeTimeFromInt32(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
 	var raw int32
 	var err error
@@ -2101,6 +2107,16 @@ func ConsumeTimeFromInt32(b []byte, typ protowire.Type) ([]byte, time.Time, erro
 	return b, time.Unix(int64(raw), 0), nil
 }
 
+func ConsumeTimeFromInt32Opt(b []byte, typ protowire.Type) ([]byte, *time.Time, error) {
+	var v time.Time
+	var err error
+	b, v, err = ConsumeTimeFromInt32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
 func ConsumeTimeFromInt64(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
 	var raw int64
 	var err error
@@ -2109,6 +2125,16 @@ func ConsumeTimeFromInt64(b []byte, typ protowire.Type) ([]byte, time.Time, erro
 		return nil, time.Time{}, err
 	}
 	return b, time.Unix(raw, 0), nil
+}
+
+func ConsumeTimeFromInt64Opt(b []byte, typ protowire.Type) ([]byte, *time.Time, error) {
+	var v time.Time
+	var err error
+	b, v, err = ConsumeTimeFromInt64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
 }
 
 func EncodeDuration(d time.Duration) []byte {
@@ -2175,6 +2201,16 @@ func ConsumeDuration(b []byte, typ protowire.Type) ([]byte, time.Duration, error
 	return b, msg, nil
 }
 
+func ConsumeDurationOpt(b []byte, typ protowire.Type) ([]byte, *time.Duration, error) {
+	var v time.Duration
+	var err error
+	b, v, err = ConsumeDuration(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
 func AppendDurationFromDuration(b []byte, v time.Duration, num protowire.Number) []byte {
 	if v == 0 {
 		return b
@@ -2200,6 +2236,16 @@ func ConsumeDurationFromDuration(b []byte, typ protowire.Type) ([]byte, time.Dur
 	return ConsumeDuration(b, typ)
 }
 
+func ConsumeDurationFromDurationOpt(b []byte, typ protowire.Type) ([]byte, *time.Duration, error) {
+	var v time.Duration
+	var err error
+	b, v, err = ConsumeDurationFromDuration(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
 func ConsumeDurationFromInt32(b []byte, typ protowire.Type) ([]byte, time.Duration, error) {
 	var raw int32
 	var err error
@@ -2210,6 +2256,16 @@ func ConsumeDurationFromInt32(b []byte, typ protowire.Type) ([]byte, time.Durati
 	return b, time.Duration(raw) * time.Second, nil
 }
 
+func ConsumeDurationFromInt32Opt(b []byte, typ protowire.Type) ([]byte, *time.Duration, error) {
+	var v time.Duration
+	var err error
+	b, v, err = ConsumeDurationFromInt32(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
+}
+
 func ConsumeDurationFromInt64(b []byte, typ protowire.Type) ([]byte, time.Duration, error) {
 	var raw int64
 	var err error
@@ -2218,6 +2274,16 @@ func ConsumeDurationFromInt64(b []byte, typ protowire.Type) ([]byte, time.Durati
 		return nil, 0, err
 	}
 	return b, time.Duration(raw) * time.Second, nil
+}
+
+func ConsumeDurationFromInt64Opt(b []byte, typ protowire.Type) ([]byte, *time.Duration, error) {
+	var v time.Duration
+	var err error
+	b, v, err = ConsumeDurationFromInt64(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
 }
 
 func AppendBytesFromUUID(b []byte, v uuid.UUID, num protowire.Number) []byte {
@@ -2239,6 +2305,16 @@ func ConsumeUUIDFromBytes(b []byte, typ protowire.Type) ([]byte, uuid.UUID, erro
 		return nil, uuid.Nil, err
 	}
 	return b, v, nil
+}
+
+func ConsumeUUIDFromBytesOpt(b []byte, typ protowire.Type) ([]byte, *uuid.UUID, error) {
+	var v uuid.UUID
+	var err error
+	b, v, err = ConsumeUUIDFromBytes(b, typ)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, &v, nil
 }
 
 func ConsumeMapEntry[K comparable, V any](b []byte, typ protowire.Type, m map[K]V, consumeK func([]byte, protowire.Type) ([]byte, K, error), consumeV func([]byte, protowire.Type) ([]byte, V, error)) ([]byte, error) {

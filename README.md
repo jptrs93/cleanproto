@@ -30,7 +30,8 @@ cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out
 
 Positional args: one or more `.proto` files to generate.
 
-> Important: Generated code relies on `google.golang.org/protobuf/encoding/protowire` for Go and `protobufjs/minimal` for  JavaScript/TypeScript. You must add these dependencies to your project.
+> [!IMPORTANT]
+> Generated code relies on `google.golang.org/protobuf/encoding/protowire` for Go and `protobufjs/minimal` for JavaScript/TypeScript. You must add these dependencies to your project.
 
 ### Native type support
 
@@ -66,7 +67,8 @@ Will generate models where the `timestamp` field has the type `Date` and `time.T
 | `cp.ts_type = "number"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
 | `cp.ts_type = "bigint"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
 
-> Note: Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native javascript type is `Date` but the wire type is `int32` then the date will be converted to and from epoch seconds to allow it to be represented as an `int32` wire type.
+> [!NOTE]
+> Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native JavaScript type is `Date` but the wire type is `int32`, then values are converted to and from epoch seconds to fit `int32` precision.
 
 ### Additional options
 
@@ -116,87 +118,91 @@ cleanproto \
 
 Example Go output (`gen/go/model.gen.go`):
 
+<details>
+<summary>Show Go output</summary>
+
 ```go
 package demo
 
 import (
-    "github.com/google/uuid"
-    "google.golang.org/protobuf/encoding/protowire"
-    "time"
+	"github.com/google/uuid"
+	"google.golang.org/protobuf/encoding/protowire"
+	"time"
 )
 
 type AuditEvent struct {
-    OccurredAt time.Time
-    Timeout    time.Duration
-    RequestID  uuid.UUID
-    ActorID    int64
-    SyncedAt   time.Time
+	OccurredAt time.Time
+	Timeout    time.Duration
+	RequestID  uuid.UUID
+	ActorID    int64
+	SyncedAt   time.Time
 }
 
 func (m *AuditEvent) Encode() []byte {
-    var b []byte
-    b = AppendInt64FromTime(b, m.OccurredAt, 1)
-    b = AppendDurationFromDuration(b, m.Timeout, 2)
-    b = AppendBytesFromUUID(b, m.RequestID, 3)
-    b = AppendInt64Field(b, m.ActorID, 4)
-    b = AppendTimestampFromTime(b, m.SyncedAt, 5)
-    return b
+	var b []byte
+	b = AppendInt64FromTime(b, m.OccurredAt, 1)
+	b = AppendDurationFromDuration(b, m.Timeout, 2)
+	b = AppendBytesFromUUID(b, m.RequestID, 3)
+	b = AppendInt64Field(b, m.ActorID, 4)
+	if !m.SyncedAt.IsZero() {
+		b = AppendBytesField(b, EncodeTimestamp(m.SyncedAt), 5)
+	}
+	return b
 }
 
 func DecodeAuditEvent(b []byte) (*AuditEvent, error) {
-    var m AuditEvent
-    var num protowire.Number
-    var typ protowire.Type
-    var err error
-    for len(b) > 0 {
-        b, num, typ, err = ConsumeTag(b)
-        if err != nil {
-            return nil, err
-        }
-        switch num {
-        case 1:
-            var item time.Time
-            b, item, err = ConsumeTimeFromInt64(b, typ)
-            if err == nil {
-                m.OccurredAt = item
-            }
-        case 2:
-            var item time.Duration
-            b, item, err = ConsumeDurationFromDuration(b, typ)
-            if err == nil {
-                m.Timeout = item
-            }
-        case 3:
-            var item uuid.UUID
-            b, item, err = ConsumeUUIDFromBytes(b, typ)
-            if err == nil {
-                m.RequestID = item
-            }
-        case 4:
-            b, m.ActorID, err = ConsumeVarInt64(b, typ)
-        case 5:
-            var item time.Time
-            b, item, err = ConsumeTimeFromTimestamp(b, typ)
-            if err == nil {
-                m.SyncedAt = item
-            }
-        default:
-            b, err = SkipFieldValue(b, num, typ)
-        }
-        if err != nil {
-            return nil, err
-        }
-    }
-    return &m, nil
+	var m AuditEvent
+	var num protowire.Number
+	var typ protowire.Type
+	var err error
+	for len(b) > 0 {
+		b, num, typ, err = ConsumeTag(b)
+		if err != nil {
+			return nil, err
+		}
+		switch num {
+		case 1:
+			b, m.OccurredAt, err = ConsumeTimeFromInt64(b, typ)
+		case 2:
+			b, m.Timeout, err = ConsumeDurationFromDuration(b, typ)
+		case 3:
+			b, m.RequestID, err = ConsumeUUIDFromBytes(b, typ)
+		case 4:
+			b, m.ActorID, err = ConsumeVarInt64(b, typ)
+		case 5:
+			b, m.SyncedAt, err = ConsumeTimeFromTimestamp(b, typ)
+		default:
+			b, err = SkipFieldValue(b, num, typ)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &m, nil
+}
+
+type ApiErr struct {
+	Code        int32
+	DisplayErr  string
+	InternalErr string
+}
+
+func (m *ApiErr) Encode() []byte {
+	var b []byte
+	b = AppendInt32Field(b, m.Code, 1)
+	b = AppendStringField(b, m.DisplayErr, 2)
+	return b
 }
 ```
 
+</details>
+
 Example JS output (`gen/js/model.js`):
 
-```js
-import protobufjsm from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
+<details>
+<summary>Show JavaScript output</summary>
 
+```js
 /**
  * @typedef {Object} AuditEvent
  * @property {number} occurredAt
@@ -205,6 +211,14 @@ const { Reader, Writer } = protobufjsm;
  * @property {bigint} actorId
  * @property {number} syncedAt
  */
+/**
+ * @typedef {Object} ApiErr
+ * @property {number} code
+ * @property {string} displayErr
+ * @property {string} internalErr
+ */
+import protobufjsm from 'protobufjs/minimal';
+const { Reader, Writer } = protobufjsm;
 
 export function writeAuditEvent(message, writer) {
     if (message.occurredAt !== undefined && message.occurredAt !== null && message.occurredAt !== 0) {
@@ -240,21 +254,26 @@ function decodeAuditEventMessage(reader, length) {
     while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-            case 1:
+            case 1: {
                 message.occurredAt = readInt64(reader, "int64");
                 break;
-            case 2:
+            }
+            case 2: {
                 message.timeout = decodeDurationBigIntMessage(reader, reader.uint32());
                 break;
-            case 3:
+            }
+            case 3: {
                 message.requestId = reader.bytes();
                 break;
-            case 4:
+            }
+            case 4: {
                 message.actorId = readInt64BigInt(reader, "int64");
                 break;
-            case 5:
+            }
+            case 5: {
                 message.syncedAt = decodeTimestampMillisMessage(reader, reader.uint32());
                 break;
+            }
             default:
                 reader.skipType(tag & 7);
         }
@@ -266,29 +285,52 @@ export function decodeAuditEvent(buffer) {
     const reader = Reader.create(new Uint8Array(buffer));
     return decodeAuditEventMessage(reader);
 }
+
+export function writeApiErr(message, writer) {
+    if (message.code !== undefined && message.code !== null && message.code !== 0) {
+        writer.uint32(tag(1, WIRE.VARINT)).int32(message.code);
+    }
+    if (message.displayErr !== undefined && message.displayErr !== null && message.displayErr !== "") {
+        writer.uint32(tag(2, WIRE.LDELIM)).string(message.displayErr);
+    }
+    if (message.internalErr !== undefined && message.internalErr !== null && message.internalErr !== "") {
+        writer.uint32(tag(3, WIRE.LDELIM)).string(message.internalErr);
+    }
+}
 ```
+
+</details>
 
 Example TS output (`gen/ts/model.ts`):
 
+<details>
+<summary>Show TypeScript output</summary>
+
 ```ts
+import protobufjsm from 'protobufjs/minimal';
+import type { Reader, Writer } from 'protobufjs/minimal';
+const { Reader, Writer } = protobufjsm;
+
 export interface AuditEvent {
   occurredAt: bigint;
-  timeout: bigint;
+  timeout: number;
   requestId: Uint8Array;
   actorId: bigint;
-  syncedAt: number;
+  syncedAt: Date;
 }
-
-import protobufjsm from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
+export interface ApiErr {
+  code: number;
+  displayErr: string;
+  internalErr: string;
+}
 
 export function writeAuditEvent(message: AuditEvent, writer: Writer): void {
   if (message.occurredAt !== undefined && message.occurredAt !== null && message.occurredAt !== 0n) {
     writer.uint32(tag(1, WIRE.VARINT)).int64(message.occurredAt.toString());
   }
-  if (message.timeout !== undefined && message.timeout !== null && message.timeout !== 0n) {
+  if (message.timeout !== undefined && message.timeout !== null) {
     writer.uint32(tag(2, WIRE.LDELIM)).fork();
-    writeDurationFromBigInt(message.timeout, writer);
+    writeDuration(message.timeout, writer);
     writer.ldelim();
   }
   if (message.requestId && message.requestId.length > 0) {
@@ -297,9 +339,9 @@ export function writeAuditEvent(message: AuditEvent, writer: Writer): void {
   if (message.actorId !== undefined && message.actorId !== null && message.actorId !== 0n) {
     writer.uint32(tag(4, WIRE.VARINT)).int64(message.actorId.toString());
   }
-  if (message.syncedAt !== undefined && message.syncedAt !== null && message.syncedAt !== 0) {
+  if (message.syncedAt !== undefined && message.syncedAt !== null) {
     writer.uint32(tag(5, WIRE.LDELIM)).fork();
-    writeTimestampFromMillis(message.syncedAt, writer);
+    writeTimestamp(message.syncedAt, writer);
     writer.ldelim();
   }
 }
@@ -312,25 +354,30 @@ export function encodeAuditEvent(message: AuditEvent): Uint8Array {
 
 function decodeAuditEventMessage(reader: Reader, length?: number): AuditEvent {
   const end = length === undefined ? reader.len : reader.pos + length;
-  const message: AuditEvent = { occurredAt: 0n, timeout: 0n, requestId: new Uint8Array(0), actorId: 0n, syncedAt: 0 };
+  const message: AuditEvent = {occurredAt: 0n, timeout: 0, requestId: new Uint8Array(0), actorId: 0n, syncedAt: new Date(0) };
   while (reader.pos < end) {
     const tag = reader.uint32();
     switch (tag >>> 3) {
-      case 1:
-        message.occurredAt = readInt64BigInt(reader, 'int64');
+      case 1: {
+        message.occurredAt = readInt64BigInt(reader, "int64");
         break;
-      case 2:
-        message.timeout = decodeDurationBigIntMessage(reader, reader.uint32());
+      }
+      case 2: {
+        message.timeout = decodeDurationMessage(reader, reader.uint32());
         break;
-      case 3:
+      }
+      case 3: {
         message.requestId = reader.bytes();
         break;
-      case 4:
-        message.actorId = readInt64BigInt(reader, 'int64');
+      }
+      case 4: {
+        message.actorId = readInt64BigInt(reader, "int64");
         break;
-      case 5:
-        message.syncedAt = decodeTimestampMillisMessage(reader, reader.uint32());
+      }
+      case 5: {
+        message.syncedAt = decodeTimestampMessage(reader, reader.uint32());
         break;
+      }
       default:
         reader.skipType(tag & 7);
     }
@@ -342,7 +389,21 @@ export function decodeAuditEvent(buffer: ArrayBuffer): AuditEvent {
   const reader = Reader.create(new Uint8Array(buffer));
   return decodeAuditEventMessage(reader);
 }
+
+export function writeApiErr(message: ApiErr, writer: Writer): void {
+  if (message.code !== undefined && message.code !== null && message.code !== 0) {
+    writer.uint32(tag(1, WIRE.VARINT)).int32(message.code);
+  }
+  if (message.displayErr !== undefined && message.displayErr !== null && message.displayErr !== "") {
+    writer.uint32(tag(2, WIRE.LDELIM)).string(message.displayErr);
+  }
+  if (message.internalErr !== undefined && message.internalErr !== null && message.internalErr !== "") {
+    writer.uint32(tag(3, WIRE.LDELIM)).string(message.internalErr);
+  }
+}
 ```
+
+</details>
 
 ## Notes
 - Unknown fields are ignored on decode.
