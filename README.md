@@ -41,7 +41,7 @@ Positional args: one or more `.proto` files to generate.
    google.protobuf.Timestamp timestamp = 1 [(cp.js_type) = "Date", (cp.go_type) = "time.Time"];
 ```
 
-Will generate models where the `timestamp` field has the type `Date` and `time.Time` in javascript and go respectively. 
+Will generate models where the `timestamp` field has the type `Date` and `time.Time` in JavaScript and Go respectively.
 
 #### Go
 
@@ -109,7 +109,6 @@ Generate:
 
 ```bash
 cleanproto \
-  -proto_path ../protos \
   -go.out ./gen/go \
   -js.out ./gen/js \
   -ts.out ./gen/ts \
