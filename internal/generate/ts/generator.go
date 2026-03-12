@@ -137,13 +137,16 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 		b.WriteString("} from './model';\n\n")
 	}
 	b.WriteString("type HeaderProvider = () => Record<string, string>;\n")
+	b.WriteString("type ErrorHandler = (response: Response) => Promise<never>;\n")
 	b.WriteString("type RequestBody = BodyInit | Uint8Array<ArrayBufferLike>;\n\n")
 	b.WriteString("export class Capi {\n")
 	b.WriteString("  baseURL: string;\n")
 	b.WriteString("  headerProvider: HeaderProvider;\n\n")
-	b.WriteString("  constructor(baseURL = '', headerProvider: HeaderProvider | null = null) {\n")
+	b.WriteString("  errorHandler: ErrorHandler;\n\n")
+	b.WriteString("  constructor(baseURL = '', headerProvider: HeaderProvider | null = null, errorHandler: ErrorHandler | null = null) {\n")
 	b.WriteString("    this.baseURL = baseURL;\n")
 	b.WriteString("    this.headerProvider = headerProvider == null ? () => ({}) : headerProvider;\n")
+	b.WriteString("    this.errorHandler = errorHandler == null ? async (response: Response) => { throw new Error(`HTTP ${response.status}`); } : errorHandler;\n")
 	b.WriteString("  }\n\n")
 	b.WriteString("  async #request(path: string, { method = 'GET', body }: { method?: string; body?: RequestBody } = {}): Promise<Response> {\n")
 	b.WriteString("    const headers = this.headerProvider() || {};\n")
@@ -189,6 +192,9 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString(m.InputType)
 			b.WriteString("(payload) });\n")
 		}
+		b.WriteString("    if (!response.ok) {\n")
+		b.WriteString("      return this.errorHandler(response);\n")
+		b.WriteString("    }\n")
 		if m.OutputType == "Empty" {
 			b.WriteString("    await response.arrayBuffer();\n")
 			b.WriteString("  }\n\n")

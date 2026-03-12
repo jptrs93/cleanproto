@@ -183,7 +183,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 				b.WriteString(", *")
 				b.WriteString(m.Input)
 			}
-			b.WriteString(", http.ResponseWriter) error\n")
+			b.WriteString(", *http.Request, http.ResponseWriter) error\n")
 			continue
 		}
 		b.WriteString("\t")
@@ -226,7 +226,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			if m.InputEmpty {
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx, w)\n")
+				b.WriteString("(ctx, r, w)\n")
 			} else {
 				b.WriteString("\t\t\treq, err := decodeBody(r, Decode")
 				b.WriteString(m.Input)
@@ -237,7 +237,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 				b.WriteString("\t\t\t}\n")
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx, req, w)\n")
+				b.WriteString("(ctx, req, r, w)\n")
 			}
 			b.WriteString("\t\t\tif err != nil {\n")
 			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")

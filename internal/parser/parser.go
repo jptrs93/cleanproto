@@ -79,7 +79,71 @@ func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
 		return ir.File{}, err
 	}
 	out.Services = services
+	ensurePolicyTypes(&out)
 	return out, nil
+}
+
+func ensurePolicyTypes(file *ir.File) {
+	if !hasPolicyUsage(file.Services) {
+		return
+	}
+	hasEnum := false
+	for _, enum := range file.Enums {
+		if enum.Name == "AccessPolicyType" {
+			hasEnum = true
+			break
+		}
+	}
+	if !hasEnum {
+		file.Enums = append(file.Enums, ir.Enum{
+			Name:     "AccessPolicyType",
+			FullName: "cp.AccessPolicyType",
+			Values: []ir.EnumValue{
+				{Name: "ACCESS_POLICY_TYPE_UNSPECIFIED", Number: 0},
+				{Name: "NO_AUTH", Number: 1},
+				{Name: "OPTIONAL_AUTH", Number: 2},
+				{Name: "ANY_OF", Number: 3},
+			},
+		})
+	}
+	hasMsg := false
+	for _, msg := range file.Messages {
+		if msg.Name == "AccessPolicy" {
+			hasMsg = true
+			break
+		}
+	}
+	if !hasMsg {
+		file.Messages = append(file.Messages, ir.Message{
+			Name:     "AccessPolicy",
+			FullName: "cp.AccessPolicy",
+			Fields: []ir.Field{
+				{
+					Name:         "policyType",
+					Number:       1,
+					Kind:         ir.KindEnum,
+					EnumFullName: "cp.AccessPolicyType",
+				},
+				{
+					Name:       "scopes",
+					Number:     2,
+					Kind:       ir.KindString,
+					IsRepeated: true,
+				},
+			},
+		})
+	}
+}
+
+func hasPolicyUsage(services []ir.Service) bool {
+	for _, svc := range services {
+		for _, method := range svc.Methods {
+			if method.PolicyType != 0 || len(method.PolicyScopes) > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, error) {
