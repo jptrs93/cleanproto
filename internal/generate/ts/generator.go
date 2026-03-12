@@ -993,7 +993,7 @@ func tsEncodeNativeField(field ir.Field, name, indent string) (string, error) {
 			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int32(Math.trunc(%s.getTime() / 1000));\n", indent, field.Number, name)
 			return b.String(), nil
 		case ir.KindInt64:
-			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int64(Math.trunc(%s.getTime() / 1000));\n", indent, field.Number, name)
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int64(Math.trunc(%s.getTime()));\n", indent, field.Number, name)
 			return b.String(), nil
 		}
 	}
@@ -1014,7 +1014,7 @@ func tsDecodeNativeField(field ir.Field, fieldName string) (string, bool, error)
 				} else if field.TSType == "Date" {
 					b.WriteString("                    ")
 					b.WriteString(fieldName)
-					b.WriteString(".push(new Date(readInt64(reader, \"int64\") * 1000));\n")
+					b.WriteString(".push(new Date(readInt64(reader, \"int64\")));\n")
 				} else {
 					b.WriteString("                    ")
 					b.WriteString(fieldName)
@@ -1030,7 +1030,7 @@ func tsDecodeNativeField(field ir.Field, fieldName string) (string, bool, error)
 			} else if field.TSType == "Date" {
 				b.WriteString("                ")
 				b.WriteString(fieldName)
-				b.WriteString(".push(new Date(readInt64(reader, \"int64\") * 1000));\n")
+				b.WriteString(".push(new Date(readInt64(reader, \"int64\")));\n")
 			} else {
 				b.WriteString("                ")
 				b.WriteString(fieldName)
@@ -1096,7 +1096,7 @@ func tsDecodeNativeField(field ir.Field, fieldName string) (string, bool, error)
 			return "                " + fieldName + " = readInt64BigInt(reader, \"int64\");\n", true, nil
 		}
 		if field.TSType == "Date" {
-			return "                " + fieldName + " = new Date(readInt64(reader, \"int64\") * 1000);\n", true, nil
+			return "                " + fieldName + " = new Date(readInt64(reader, \"int64\"));\n", true, nil
 		}
 		return "                " + fieldName + " = readInt64(reader, \"int64\");\n", true, nil
 	}

@@ -68,7 +68,7 @@ Will generate models where the `timestamp` field has the type `Date` and `time.T
 | `cp.ts_type = "bigint"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
 
 > [!NOTE]
-> Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native JavaScript type is `Date` but the wire type is `int32`, then values are converted to and from epoch seconds to fit `int32` precision.
+> Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native JavaScript type is `Date` but the wire type is `int32`, then values are converted to and from epoch seconds to fit `int32` precision. With `int64`, `Date`/`time.Time` values are converted to and from epoch milliseconds.
 
 ### Additional options
 
@@ -81,7 +81,7 @@ Will generate models where the `timestamp` field has the type `Date` and `time.T
 | `cp.ts_encode = false` | Keep the field in generated TypeScript models, but skip writing it during TS encoding. |
 | `cp.ts_ignore = true` | Omit the field completely from generated TypeScript models and their encode/decoding. |
 
-## End-to-end example
+## End-to-end example (models only)
 
 Proto (`audit.proto`):
 
@@ -98,7 +98,7 @@ option go_package = "demo";
 
 message AuditEvent {
   int64 occurred_at = 1 [(cp.go_type) = "time.Time"];
-  google.protobuf.Duration timeout = 2 [(cp.go_type) = "time.Duration", (cp.js_type) = "bigint"];
+  google.protobuf.Duration timeout = 2 [(cp.go_type) = "time.Duration", (cp.js_type) = "bigint", (cp.ts_type) = "number"];
   bytes request_id = 3 [(cp.go_type) = "github.com/google/uuid.UUID"];
   int64 actor_id = 4 [(cp.js_type) = "bigint"];
   google.protobuf.Timestamp synced_at = 5 [(cp.js_type) = "number"];
@@ -268,17 +268,6 @@ export function decodeAuditEvent(buffer) {
     return decodeAuditEventMessage(reader);
 }
 
-export function writeApiErr(message, writer) {
-    if (message.code !== undefined && message.code !== null && message.code !== 0) {
-        writer.uint32(tag(1, WIRE.VARINT)).int32(message.code);
-    }
-    if (message.displayErr !== undefined && message.displayErr !== null && message.displayErr !== "") {
-        writer.uint32(tag(2, WIRE.LDELIM)).string(message.displayErr);
-    }
-    if (message.internalErr !== undefined && message.internalErr !== null && message.internalErr !== "") {
-        writer.uint32(tag(3, WIRE.LDELIM)).string(message.internalErr);
-    }
-}
 ```
 
 </details>
@@ -370,17 +359,6 @@ export function decodeAuditEvent(buffer: ArrayBuffer): AuditEvent {
   return decodeAuditEventMessage(reader);
 }
 
-export function writeApiErr(message: ApiErr, writer: Writer): void {
-  if (message.code !== undefined && message.code !== null && message.code !== 0) {
-    writer.uint32(tag(1, WIRE.VARINT)).int32(message.code);
-  }
-  if (message.displayErr !== undefined && message.displayErr !== null && message.displayErr !== "") {
-    writer.uint32(tag(2, WIRE.LDELIM)).string(message.displayErr);
-  }
-  if (message.internalErr !== undefined && message.internalErr !== null && message.internalErr !== "") {
-    writer.uint32(tag(3, WIRE.LDELIM)).string(message.internalErr);
-  }
-}
 ```
 
 </details>

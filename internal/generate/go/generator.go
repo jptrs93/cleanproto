@@ -880,7 +880,7 @@ func goNativeRawValueExpr(field ir.Field, name string) string {
 		if field.Kind == ir.KindInt32 {
 			return "int32(" + name + ".Unix())"
 		}
-		return name + ".Unix()"
+		return name + ".UnixMilli()"
 	case "time.Duration":
 		if field.Kind == ir.KindInt32 {
 			return "int32(" + name + " / time.Second)"
@@ -935,6 +935,9 @@ func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
 func goNativeFromRawExpr(field ir.Field, rawName string) string {
 	switch field.GoType {
 	case "time.Time":
+		if field.Kind == ir.KindInt64 {
+			return "time.UnixMilli(int64(" + rawName + "))"
+		}
 		return "time.Unix(int64(" + rawName + "), 0)"
 	case "time.Duration":
 		return "time.Duration(" + rawName + ") * time.Second"
@@ -2080,7 +2083,7 @@ func AppendInt64FromTime(b []byte, v time.Time, num protowire.Number) []byte {
 	if v.IsZero() {
 		return b
 	}
-	return AppendInt64Field(b, v.Unix(), num)
+	return AppendInt64Field(b, v.UnixMilli(), num)
 }
 
 func ConsumeTimeFromTimestamp(b []byte, typ protowire.Type) ([]byte, time.Time, error) {
@@ -2124,7 +2127,7 @@ func ConsumeTimeFromInt64(b []byte, typ protowire.Type) ([]byte, time.Time, erro
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	return b, time.Unix(raw, 0), nil
+	return b, time.UnixMilli(raw), nil
 }
 
 func ConsumeTimeFromInt64Opt(b []byte, typ protowire.Type) ([]byte, *time.Time, error) {
