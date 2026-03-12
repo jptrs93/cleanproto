@@ -28,14 +28,12 @@ func (s *stringList) Set(value string) error {
 func main() {
 	var importPaths stringList
 	var goOut string
-	var goPkg string
 	var jsOut string
 	var tsOut string
 	var goJSONTags string
 
 	flag.Var(&importPaths, "proto_path", "proto import path (repeatable)")
 	flag.StringVar(&goOut, "go.out", "", "output directory for Go")
-	flag.StringVar(&goPkg, "go.pkg", "", "Go package name for generated code")
 	flag.StringVar(&jsOut, "js.out", "", "output directory for JS")
 	flag.StringVar(&tsOut, "ts.out", "", "output directory for TS")
 	flag.StringVar(&goJSONTags, "go.jsontags", "", "Go JSON tags style (snake)")
@@ -66,7 +64,6 @@ func main() {
 	}
 
 	options := generate.Options{
-		GoPackage:  goPkg,
 		GoOut:      cleanPath(goOut),
 		JsOut:      cleanPath(jsOut),
 		TsOut:      cleanPath(tsOut),

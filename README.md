@@ -4,6 +4,12 @@ A minimal proto3 generator that generates clean, fast, readable code, supporting
 
 Currently supports Go, JavaScript, and TypeScript.
 
+| Language | Models | Client stubs | Server stubs |
+| --- | --- | --- | --- |
+| Go | Yes | No | Yes |
+| JavaScript | Yes | No | No |
+| TypeScript | Yes | No | No |
+
 ## Install
 ```
 go install github.com/jptrs93/cleanproto/cmd/cleanproto@latest
@@ -11,8 +17,67 @@ go install github.com/jptrs93/cleanproto/cmd/cleanproto@latest
 
 ## Usage
 ```
-cleanproto -proto_path ../protos -go.out ./gen/go -go.pkg api -js.out ./gen/js -ts.out ./gen/ts example.proto
+cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out ./apigen/ts example.proto
 ```
+
+| Option | Required | Description | Default |
+| --- | --- | --- | --- |
+| `-proto_path <dir>` | No | Proto import path. Repeatable. | `.` |
+| `-go.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated Go files. | none |
+| `-go.jsontags <style>` | No | Go JSON tags style. Supported: `snake`. | none |
+| `-js.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated JavaScript files. | none |
+| `-ts.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated TypeScript files. | none |
+
+Positional args: one or more `.proto` files to generate.
+
+> Important: Generated code relies on `google.golang.org/protobuf/encoding/protowire` for Go and `protobufjs/minimal` for  JavaScript/TypeScript. You must add these dependencies to your project.
+
+### Native type support
+
+`cleanproto` provides options so you can direct it to generate more natural language native types for certain field types. This doesn't change the ultimate on wire byte representation but conversion to the native type gets baked into the generated decode/encode functions. For example.
+
+```protobuf
+   google.protobuf.Timestamp timestamp = 1 [(cp.js_type) = "Date", (cp.go_type) = "time.Time"];
+```
+
+Will generate models where the `timestamp` field has the type `Date` and `time.Time` in javascript and go respectively. 
+
+#### Go
+
+| Native type option | Supported wire types |
+| --- | --- |
+| `cp.go_type = "time.Time"` | `google.protobuf.Timestamp`, `int32`, `int64` |
+| `cp.go_type = "time.Duration"` | `google.protobuf.Duration`, `int32`, `int64` |
+| `cp.go_type = "github.com/google/uuid.UUID"` | `bytes` |
+
+#### JavaScript
+
+| Native type option | Supported wire types |
+| --- | --- |
+| `cp.js_type = "Date"` | `google.protobuf.Timestamp`, `int32`, `int64` |
+| `cp.js_type = "number"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+| `cp.js_type = "bigint"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+
+#### TypeScript
+
+| Native type option | Supported wire types |
+| --- | --- |
+| `cp.ts_type = "Date"` | `google.protobuf.Timestamp`, `int32`, `int64` |
+| `cp.ts_type = "number"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+| `cp.ts_type = "bigint"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+
+> Note: Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native javascript type is `Date` but the wire type is `int32` then the date will be converted to and from epoch seconds to allow it to be represented as an `int32` wire type.
+
+### Additional options
+
+| Option | Effect |
+| --- | --- |
+| `cp.go_encode = false` | Keep the field in generated Go models, but skip writing it during Go encoding. |
+| `cp.go_ignore = true` | Omit the field completely from generated Go models and their encode/decoding. |
+| `cp.js_encode = false` | Keep the field in generated JavaScript models, but skip writing it during JS encoding. |
+| `cp.js_ignore = true` | Omit the field completely from generated JavaScript models and their encode/decoding. |
+| `cp.ts_encode = false` | Keep the field in generated TypeScript models, but skip writing it during TS encoding. |
+| `cp.ts_ignore = true` | Omit the field completely from generated TypeScript models and their encode/decoding. |
 
 ## End-to-end example
 
@@ -44,7 +109,6 @@ Generate:
 cleanproto \
   -proto_path ../protos \
   -go.out ./gen/go \
-  -go.pkg demo \
   -js.out ./gen/js \
   -ts.out ./gen/ts \
   audit.proto
@@ -280,30 +344,7 @@ export function decodeAuditEvent(buffer: ArrayBuffer): AuditEvent {
 }
 ```
 
-## Options in .proto
-- `option go_package = "module/path;pkg";` for Go package name.
-- `option (cp.go_type) = "time.Time" | "time.Duration" | "github.com/google/uuid.UUID";` on fields for Go native type conversion (requires `import "options.proto";`).
-- `option (cp.go_encode) = false;` on fields to keep the field in generated Go type definitions but skip writing it during Go encoding.
-- `option (cp.go_ignore) = true;` on fields to omit the field from generated Go type definitions and Go encode/decode.
-- `option (cp.js_type) = "number" | "bigint" | "Date";` on fields for JS native type conversion (requires `import "options.proto";`).
-- `option (cp.js_encode) = false;` on fields to keep the field in generated JS typedefs but skip writing it during JS encoding.
-- `option (cp.js_ignore) = true;` on fields to omit the field from generated JS typedefs and JS encode/decode.
-- `option (cp.ts_type) = "number" | "bigint" | "Date";` on fields for TS native type conversion (requires `import "options.proto";`). In TS output, 64-bit integer wire types default to `bigint` when no explicit `cp.ts_type` is set.
-- `option (cp.ts_encode) = false;` on fields to keep the field in generated TS type definitions but skip writing it during TS encoding.
-- `option (cp.ts_ignore) = true;` on fields to omit the field from generated TS type definitions and TS encode/decode.
-
-## CLI args
-- `-go.out` output directory for Go.
-- `-go.pkg` Go package name for generated code.
-- `-go.jsontags snake` Go JSON tag style; omit to generate no JSON tags.
-- `-js.out` output directory for JS.
-- `-ts.out` output directory for TS.
-
 ## Notes
 - Unknown fields are ignored on decode.
 - `oneof` not supported.
-- Generated Javascript code uses `protobufjs/minimal`.
-- Go output embeds `util.gen.go` which requires `google.golang.org/protobuf/encoding/protowire`.
-- `cp.<lang>.ignore = true` takes precedence over `cp.<lang>.encode = false` for that language, since ignored fields are omitted entirely.
-- For `cp.js_type = "Date"`, supported wire types are `google.protobuf.Timestamp`, `int32` (assumed epoch seconds), and `int64` (assumed epoch seconds).
-- When you specify a native type (for example `(cp.go_type) = "time.Duration"` or `(cp.js_type) = "bigint"`), it does not change the wire serialization; it only changes generated API types plus conversion code. For example, `int32 created_at = 1 [(cp.go_type) = "time.Time"];` still encodes on the wire as `int32` varint. It is assumed as epoch seconds. And if you used int64 it would be assumed as epoch milliseconds. These assumed conversions at not configurable. You can only add a native type option on a compatible wire type with a supported conversion. A native type option on an incompatible wire type will result in an error.
+- `cp.<lang>_ignore = true` takes precedence over `cp.<lang>_encode = false` for that language, since ignored fields are omitted entirely.

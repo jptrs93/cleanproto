@@ -36,12 +36,9 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 		if goOut == "" {
 			continue
 		}
-		pkg := options.GoPackage
+		pkg := file.GoPackage
 		if pkg == "" {
-			pkg = file.GoPackage
-		}
-		if pkg == "" {
-			return nil, fmt.Errorf("go package name is required (set -go.pkg or option go_package)")
+			return nil, fmt.Errorf("go package name is required (set option go_package)")
 		}
 		if utilPkg == "" {
 			utilPkg = pkg
@@ -1973,7 +1970,12 @@ func HandleReqErr(ctx context.Context, err error, r *http.Request, w http.Respon
 	}
 	var httpErr ApiErr
 	if !errors.As(err, &httpErr) {
-		httpErr = ApiErr{DisplayErr: "Unknown server error", Code: http.StatusInternalServerError}
+		var httpErrPtr *ApiErr
+		if errors.As(err, &httpErrPtr) && httpErrPtr != nil {
+			httpErr = *httpErrPtr
+		} else {
+			httpErr = ApiErr{DisplayErr: "Unknown server error", Code: http.StatusInternalServerError}
+		}
 	}
 	w.Header().Set("Content-Type", "application/protobuf")
 	RespondWithStatus(ctx, w, httpErr.Encode(), int(httpErr.Code))

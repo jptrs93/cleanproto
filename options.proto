@@ -18,6 +18,12 @@ message AccessPolicy {
 
 message Empty {}
 
+message ApiErr {
+  int32 code = 1;
+  string display_err = 2;
+  string internal_err = 3 [(cp.go_encode) = false];
+}
+
 extend google.protobuf.FieldOptions {
   string go_type = 50010;
   bool go_encode = 50012;

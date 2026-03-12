@@ -30,6 +30,10 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 	compiler := protocompile.Compiler{
 		Resolver: protocompile.WithStandardImports(resolver),
 	}
+	builtins, err := loadBuiltinCatalog(ctx, compiler)
+	if err != nil {
+		return nil, err
+	}
 	files, err := compiler.Compile(ctx, filePaths...)
 	if err != nil {
 		return nil, err
@@ -41,9 +45,43 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 		if err != nil {
 			return nil, err
 		}
+		ensureGeneratedTypes(&irFile, builtins)
 		result = append(result, irFile)
 	}
 	return result, nil
+}
+
+type builtinCatalog struct {
+	Messages map[string]ir.Message
+	Enums    map[string]ir.Enum
+}
+
+func loadBuiltinCatalog(ctx context.Context, compiler protocompile.Compiler) (builtinCatalog, error) {
+	files, err := compiler.Compile(ctx, optionsProtoPath)
+	if err != nil {
+		return builtinCatalog{}, err
+	}
+	for _, file := range files {
+		if file.Path() != optionsProtoPath {
+			continue
+		}
+		irFile, err := fileToIR(file)
+		if err != nil {
+			return builtinCatalog{}, err
+		}
+		catalog := builtinCatalog{
+			Messages: make(map[string]ir.Message, len(irFile.Messages)),
+			Enums:    make(map[string]ir.Enum, len(irFile.Enums)),
+		}
+		for _, msg := range irFile.Messages {
+			catalog.Messages[msg.FullName] = msg
+		}
+		for _, enum := range irFile.Enums {
+			catalog.Enums[enum.FullName] = enum
+		}
+		return catalog, nil
+	}
+	return builtinCatalog{}, fmt.Errorf("%s not found", optionsProtoPath)
 }
 
 func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
@@ -79,59 +117,40 @@ func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
 		return ir.File{}, err
 	}
 	out.Services = services
-	ensurePolicyTypes(&out)
 	return out, nil
 }
 
-func ensurePolicyTypes(file *ir.File) {
+func ensureGeneratedTypes(file *ir.File, builtins builtinCatalog) {
+	ensurePolicyTypes(file, builtins)
+	ensureApiErr(file, builtins)
+}
+
+func ensureApiErr(file *ir.File, builtins builtinCatalog) {
+	if hasMessageName(file.Messages, "ApiErr") {
+		return
+	}
+	msg, ok := builtins.Messages["cp.ApiErr"]
+	if !ok {
+		return
+	}
+	file.Messages = append(file.Messages, msg)
+}
+
+func ensurePolicyTypes(file *ir.File, builtins builtinCatalog) {
 	if !hasPolicyUsage(file.Services) {
 		return
 	}
-	hasEnum := false
-	for _, enum := range file.Enums {
-		if enum.Name == "AccessPolicyType" {
-			hasEnum = true
-			break
+	if !hasEnumName(file.Enums, "AccessPolicyType") {
+		enum, ok := builtins.Enums["cp.AccessPolicyType"]
+		if ok {
+			file.Enums = append(file.Enums, enum)
 		}
 	}
-	if !hasEnum {
-		file.Enums = append(file.Enums, ir.Enum{
-			Name:     "AccessPolicyType",
-			FullName: "cp.AccessPolicyType",
-			Values: []ir.EnumValue{
-				{Name: "ACCESS_POLICY_TYPE_UNSPECIFIED", Number: 0},
-				{Name: "NO_AUTH", Number: 1},
-				{Name: "OPTIONAL_AUTH", Number: 2},
-				{Name: "ANY_OF", Number: 3},
-			},
-		})
-	}
-	hasMsg := false
-	for _, msg := range file.Messages {
-		if msg.Name == "AccessPolicy" {
-			hasMsg = true
-			break
+	if !hasMessageName(file.Messages, "AccessPolicy") {
+		msg, ok := builtins.Messages["cp.AccessPolicy"]
+		if ok {
+			file.Messages = append(file.Messages, msg)
 		}
-	}
-	if !hasMsg {
-		file.Messages = append(file.Messages, ir.Message{
-			Name:     "AccessPolicy",
-			FullName: "cp.AccessPolicy",
-			Fields: []ir.Field{
-				{
-					Name:         "policyType",
-					Number:       1,
-					Kind:         ir.KindEnum,
-					EnumFullName: "cp.AccessPolicyType",
-				},
-				{
-					Name:       "scopes",
-					Number:     2,
-					Kind:       ir.KindString,
-					IsRepeated: true,
-				},
-			},
-		})
 	}
 }
 
@@ -141,6 +160,24 @@ func hasPolicyUsage(services []ir.Service) bool {
 			if method.PolicyType != 0 || len(method.PolicyScopes) > 0 {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func hasMessageName(messages []ir.Message, name string) bool {
+	for _, msg := range messages {
+		if msg.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnumName(enums []ir.Enum, name string) bool {
+	for _, enum := range enums {
+		if enum.Name == name {
+			return true
 		}
 	}
 	return false

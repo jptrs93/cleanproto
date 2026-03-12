@@ -8,7 +8,6 @@ type OutputFile struct {
 }
 
 type Options struct {
-	GoPackage  string
 	GoOut      string
 	JsOut      string
 	TsOut      string
