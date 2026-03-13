@@ -655,3 +655,9 @@ export class Capi {
 - Unknown fields are ignored on decode.
 - `oneof` not supported.
 - `cp.<lang>_ignore = true` takes precedence over `cp.<lang>_encode = false` for that language, since ignored fields are omitted entirely.
+
+## Todo
+- Add options to indicate server or client side like `cp.go_server_only`.
+- Only generate `Decode`/`Encode` methods actually used by a side. For example, a server does not need to decode its response types, only encode them.
+- Update generated client calling code so it only adds auth headers in alignment with access policies when defined.
+- In the utils code added to support generated code, strip out any helper functions that are not actually used.
