@@ -12,7 +12,7 @@ Currently supports Go, JavaScript, and TypeScript.
 
 ## Install
 ```
-go install github.com/jptrs93/cleanproto/cmd/cleanproto@latest
+go install github.com/jptrs93/cleanproto/cmd/cleanproto@v1.2.1
 ```
 
 ## Usage
@@ -35,13 +35,13 @@ Positional args: one or more `.proto` files to generate.
 
 ### Native type support
 
-`cleanproto` provides options so you can direct it to generate more natural language native types for certain field types. This doesn't change the ultimate on wire byte representation but conversion to the native type gets baked into the generated decode/encode functions. For example.
+`cleanproto` provides options so you can direct it to generate more natural native types for certain field types. This doesn't change the on-wire byte representation, but conversion to the native type gets baked into the generated decode/encode functions. For example.
 
 ```protobuf
    google.protobuf.Timestamp timestamp = 1 [(cp.js_type) = "Date", (cp.go_type) = "time.Time"];
 ```
 
-Will generate models where the `timestamp` field has the type `Date` and `time.Time` in JavaScript and Go respectively.
+This generates models where the `timestamp` field has the type `Date` and `time.Time` in JavaScript and Go respectively.
 
 #### Go
 
@@ -367,7 +367,7 @@ export function decodeAuditEvent(buffer: ArrayBuffer): AuditEvent {
 
 ## Example (server stubs)
 
-`cleanproto` also generates Go server stubs and JS/TS client calling code when your proto includes a `service`.
+`cleanproto` also generates Go server stubs and JavaScript client calling code when your proto includes a `service`.
 
 Proto (`example/library.proto`):
 
@@ -419,11 +419,10 @@ Generate:
 cleanproto \
   -go.out ./gen/go \
   -js.out ./gen/js \
-  -ts.out ./gen/ts \
   example/library.proto
 ```
 
-This writes `model.gen.go`, `mux.gen.go`, `mux_util.gen.go`, and `util.gen.go` for Go, plus `model.js`/`capi.js` and `model.ts`/`capi.ts` for JS/TS. The checked-in example outputs in this repo live under `example/testdata/gen`.
+This writes `model.gen.go`, `mux.gen.go`, `mux_util.gen.go`, and `util.gen.go` for Go, plus `model.js` and `capi.js` for JavaScript. The checked-in example outputs in this repo live under `example/testdata/gen`.
 
 <details>
 <summary>Show Go mux output</summary>
@@ -505,6 +504,148 @@ func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, middlewares ...Middle
         w.WriteHeader(http.StatusNoContent)
     }, middlewares...))
     return m
+}
+```
+
+</details>
+
+- To use the Go stubs, you just implement the generated handler interface and pass it to `CreateMux`.
+- A minimal `main.go` can look like this:
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+
+    "your/module/gen/go/example"
+)
+
+type server struct{}
+
+func (server) GetLibraryV1(context.Context) (*example.Library, error) {
+    return &example.Library{Name: "City Library"}, nil
+}
+
+func (server) GetLibraryBookV1(_ context.Context, req *example.GetBookReq) (*example.Book, error) {
+    return &example.Book{ID: req.ID, Title: "Example Book", Author: "A. Writer"}, nil
+}
+
+func (server) PostLibraryBookCheckoutV1(context.Context, *example.CheckoutBookReq) error {
+    return nil
+}
+
+func main() {
+    mux := example.CreateMux(server{}, nil)
+    log.Fatal(http.ListenAndServe(":8080", mux))
+}
+```
+
+- `cp.Empty` from `options.proto` is the special empty message type; when used as a request or response it becomes no request body or no response body in the generated server/client surface.
+- `cp.go_custom = true` switches a Go handler into custom mode so the generated interface method receives `*http.Request` and `http.ResponseWriter` directly, while still optionally decoding the protobuf request first.
+
+<details>
+<summary>Show JavaScript output</summary>
+
+```js
+// model.js
+
+/**
+ * @typedef {Object} Book
+ * @property {string} id
+ * @property {string} title
+ * @property {string} author
+ */
+/**
+ * @typedef {Object} Library
+ * @property {string} id
+ * @property {string} name
+ * @property {Book[]} books
+ */
+/**
+ * @typedef {Object} GetBookReq
+ * @property {string} id
+ */
+/**
+ * @typedef {Object} CheckoutBookReq
+ * @property {string} libraryId
+ * @property {string} bookId
+ */
+import protobufjsm from 'protobufjs/minimal';
+const { Reader, Writer } = protobufjsm;
+
+export function encodeGetBookReq(message) {
+    const writer = Writer.create();
+    writeGetBookReq(message, writer);
+    return writer.finish();
+}
+
+export function decodeBook(buffer) {
+    const reader = Reader.create(new Uint8Array(buffer));
+    return decodeBookMessage(reader);
+}
+
+export function decodeLibrary(buffer) {
+    const reader = Reader.create(new Uint8Array(buffer));
+    return decodeLibraryMessage(reader);
+}
+
+export function encodeCheckoutBookReq(message) {
+    const writer = Writer.create();
+    writeCheckoutBookReq(message, writer);
+    return writer.finish();
+}
+
+// capi.js
+
+import {
+  decodeBook,
+  decodeLibrary,
+  encodeCheckoutBookReq,
+  encodeGetBookReq,
+} from './model.js';
+
+export class Capi {
+  constructor(baseURL = '', headerProvider = null, errorHandler = null) {
+    this.baseURL = baseURL;
+    this.headerProvider = headerProvider == null ? () => ({}) : headerProvider;
+    this.errorHandler = errorHandler == null ? async (response) => { throw new Error(`HTTP ${response.status}`); } : errorHandler;
+  }
+
+  async #request(path, { method = 'GET', body } = {}) {
+    const headers = this.headerProvider() || {};
+    headers['Accept'] = 'application/x-protobuf';
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/x-protobuf';
+    }
+    return fetch(`${this.baseURL}${path}`, { method, headers, body, credentials: 'include' });
+  }
+
+  async getLibraryV1() {
+    const response = await this.#request('/library/v1', { method: 'GET' });
+    if (!response.ok) {
+      return this.errorHandler(response);
+    }
+    return decodeLibrary(await response.arrayBuffer());
+  }
+
+  async getLibraryBookV1(payload) {
+    const response = await this.#request('/library/book/v1', { method: 'GET', body: encodeGetBookReq(payload) });
+    if (!response.ok) {
+      return this.errorHandler(response);
+    }
+    return decodeBook(await response.arrayBuffer());
+  }
+
+  async postLibraryBook_CheckoutV1(payload) {
+    const response = await this.#request('/library/book-checkout-v1', { method: 'POST', body: encodeCheckoutBookReq(payload) });
+    if (!response.ok) {
+      return this.errorHandler(response);
+    }
+    await response.arrayBuffer();
+  }
 }
 ```
 
