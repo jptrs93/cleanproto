@@ -81,7 +81,9 @@ Will generate models where the `timestamp` field has the type `Date` and `time.T
 | `cp.ts_encode = false` | Keep the field in generated TypeScript models, but skip writing it during TS encoding. |
 | `cp.ts_ignore = true` | Omit the field completely from generated TypeScript models and their encode/decoding. |
 
-## End-to-end example (models only)
+
+
+## Example (models only)
 
 Proto (`audit.proto`):
 
@@ -359,6 +361,151 @@ export function decodeAuditEvent(buffer: ArrayBuffer): AuditEvent {
   return decodeAuditEventMessage(reader);
 }
 
+```
+
+</details>
+
+## Example (server stubs)
+
+`cleanproto` also generates Go server stubs and JS/TS client calling code when your proto includes a `service`.
+
+Proto (`example/library.proto`):
+
+```proto
+syntax = "proto3";
+
+package example;
+
+import "options.proto";
+
+option go_package = "example";
+
+message Book {
+  string id = 1;
+  string title = 2;
+  string author = 3;
+}
+
+message Library {
+  string id = 1;
+  string name = 2;
+  repeated Book books = 3;
+}
+
+message GetBookReq {
+  string id = 1;
+}
+
+message CheckoutBookReq {
+  string library_id = 1;
+  string book_id = 2;
+}
+
+service LibraryService {
+  rpc GetLibraryV1(cp.Empty) returns (Library);
+  rpc GetLibraryBookV1(GetBookReq) returns (Book);
+  rpc PostLibraryBook_CheckoutV1(CheckoutBookReq) returns (cp.Empty);
+}
+```
+
+- HTTP verb mapping comes from the RPC name prefix: `Get`, `Post`, `Put`, `Patch`, and `Delete` map to `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`.
+- A trailing `V1` becomes the `/v1` URL prefix.
+- The first CamelCase segment after the verb becomes slash-separated path parts, so `GetLibraryBookV1` maps to `/v1/library/book`.
+- Additional `_`-separated suffix segments become kebab-case suffixes, so `PostLibraryBook_CheckoutV1` maps to `/v1/library/book-checkout`.
+
+Generate:
+
+```bash
+cleanproto \
+  -go.out ./gen/go \
+  -js.out ./gen/js \
+  -ts.out ./gen/ts \
+  example/library.proto
+```
+
+This writes `model.gen.go`, `mux.gen.go`, `mux_util.gen.go`, and `util.gen.go` for Go, plus `model.js`/`capi.js` and `model.ts`/`capi.ts` for JS/TS. The checked-in example outputs in this repo live under `example/testdata/gen`.
+
+<details>
+<summary>Show Go mux output</summary>
+
+```go
+package example
+
+import (
+    "context"
+    "net/http"
+)
+
+type HandlerFunc = func(context.Context, http.ResponseWriter, *http.Request)
+type MiddlewareFunc func(next HandlerFunc) HandlerFunc
+
+type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (context.Context, error)
+
+func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.HandlerFunc {
+    for _, m := range middlewares {
+        h = m(h)
+    }
+    return func(w http.ResponseWriter, r *http.Request) {
+        h(r.Context(), w, r)
+    }
+}
+
+type ServerHandler interface {
+    GetLibraryV1(context.Context) (*Library, error)
+    GetLibraryBookV1(context.Context, *GetBookReq) (*Book, error)
+    PostLibraryBookCheckoutV1(context.Context, *CheckoutBookReq) error
+}
+
+func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, middlewares ...MiddlewareFunc) *http.ServeMux {
+    if verifyAuth == nil {
+        verifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (context.Context, error) {
+            return ctx, nil
+        }
+    }
+    m := http.NewServeMux()
+    m.HandleFunc("GET /v1/library", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        ctx, err := verifyAuth(ctx, r, AccessPolicy{})
+        if err != nil {
+            HandleReqErr(ctx, err, r, w)
+            return
+        }
+        res, err := h.GetLibraryV1(ctx)
+        Respond(ctx, r, w, res, err)
+    }, middlewares...))
+    m.HandleFunc("GET /v1/library/book", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        ctx, err := verifyAuth(ctx, r, AccessPolicy{})
+        if err != nil {
+            HandleReqErr(ctx, err, r, w)
+            return
+        }
+        req, err := decodeBody(r, DecodeGetBookReq)
+        if err != nil {
+            HandleReqErr(ctx, err, r, w)
+            return
+        }
+        res, err := h.GetLibraryBookV1(ctx, req)
+        Respond(ctx, r, w, res, err)
+    }, middlewares...))
+    m.HandleFunc("POST /v1/library/book-checkout", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        ctx, err := verifyAuth(ctx, r, AccessPolicy{})
+        if err != nil {
+            HandleReqErr(ctx, err, r, w)
+            return
+        }
+        req, err := decodeBody(r, DecodeCheckoutBookReq)
+        if err != nil {
+            HandleReqErr(ctx, err, r, w)
+            return
+        }
+        err = h.PostLibraryBookCheckoutV1(ctx, req)
+        if err != nil {
+            HandleReqErr(ctx, err, r, w)
+            return
+        }
+        w.WriteHeader(http.StatusNoContent)
+    }, middlewares...))
+    return m
+}
 ```
 
 </details>
