@@ -12,7 +12,7 @@ Currently supports Go, JavaScript, and TypeScript.
 
 ## Install
 ```
-go install github.com/jptrs93/cleanproto/cmd/cleanproto@v1.2.1
+go install github.com/jptrs93/cleanproto/cmd/cleanproto@v1.2.2
 ```
 
 ## Usage
