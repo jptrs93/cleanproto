@@ -138,7 +138,7 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	}
 	b.WriteString("type HeaderProvider = () => Record<string, string>;\n")
 	b.WriteString("type ErrorHandler = (response: Response) => Promise<never>;\n")
-	b.WriteString("type RequestBody = BodyInit | Uint8Array<ArrayBufferLike>;\n\n")
+	b.WriteString("type RequestBody = BodyInit;\n\n")
 	b.WriteString("export class Capi {\n")
 	b.WriteString("  baseURL: string;\n")
 	b.WriteString("  headerProvider: HeaderProvider;\n\n")
@@ -190,7 +190,7 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("', body: encode")
 			b.WriteString(m.InputType)
-			b.WriteString("(payload) });\n")
+			b.WriteString("(payload) as BodyInit });\n")
 		}
 		b.WriteString("    if (!response.ok) {\n")
 		b.WriteString("      return this.errorHandler(response);\n")
@@ -373,7 +373,7 @@ func buildTSTypeDecl(msg ir.Message, msgIndex map[string]ir.Message) (string, er
 		}
 		b.WriteString("  ")
 		b.WriteString(field.Name)
-		if field.IsOptional {
+		if field.IsOptional || (field.Kind == ir.KindMessage && !field.IsRepeated && !field.IsMap) {
 			b.WriteString("?")
 		}
 		b.WriteString(": ")
@@ -410,7 +410,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 	needsReadInt64 := false
 	needsTimestamp := false
 	needsDuration := false
-	fmt.Fprintf(&b, "export function write%s(message: %s, writer: Writer): void {\n", msg.Name, msg.Name)
+	fmt.Fprintf(&b, "export function write%s(message: %s, writer: PBWriter): void {\n", msg.Name, msg.Name)
 	if ok, field := tsIsRepeatedWrapper(msg); ok {
 		if field.IsPacked && jsIsPackable(field.Kind) {
 			b.WriteString("    if (message) {\n")
@@ -578,7 +578,7 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 	needsReadInt64 := false
 	needsTimestamp := false
 	needsDuration := false
-	fmt.Fprintf(&b, "function decode%sMessage(reader: Reader, length?: number): %s {\n", msg.Name, msg.Name)
+	fmt.Fprintf(&b, "function decode%sMessage(reader: PBReader, length?: number): %s {\n", msg.Name, msg.Name)
 	b.WriteString("    const end = length === undefined ? reader.len : reader.pos + length;\n")
 	if ok, field := tsIsRepeatedWrapper(msg); ok {
 		b.WriteString("    const message: ")
@@ -720,7 +720,7 @@ func tsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
 		}
 		return "0n"
 	}
-	if field.IsOptional {
+	if field.IsOptional || (field.Kind == ir.KindMessage && !field.IsRepeated && !field.IsMap) {
 		return "undefined"
 	}
 	switch field.Kind {

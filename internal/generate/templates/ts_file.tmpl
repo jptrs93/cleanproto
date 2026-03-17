@@ -1,5 +1,5 @@
 import protobufjsm from 'protobufjs/minimal';
-import type { Reader, Writer } from 'protobufjs/minimal';
+import type { Reader as PBReader, Writer as PBWriter } from 'protobufjs/minimal';
 const { Reader, Writer } = protobufjsm;
 
 {{- range .TypeDecls}}
@@ -27,7 +27,7 @@ const tag = (field: number, wire: number): number => (field << 3) | wire;
 
 {{end}}
 {{- if .NeedsReadInt64}}
-function readInt64(reader: Reader, method: string): number {
+function readInt64(reader: PBReader, method: string): number {
     const value = reader[method]();
     if (typeof value === "number") {
         return value;
@@ -36,7 +36,7 @@ function readInt64(reader: Reader, method: string): number {
 }
 {{- end}}
 {{- if .NeedsReadInt64BigInt}}
-function readInt64BigInt(reader: Reader, method: string): bigint {
+function readInt64BigInt(reader: PBReader, method: string): bigint {
     const value = reader[method]();
     if (typeof value === "number") {
         return BigInt(Math.trunc(value));
@@ -48,7 +48,7 @@ function readInt64BigInt(reader: Reader, method: string): bigint {
 }
 {{- end}}
 {{- if .NeedsTimestamp}}
-function writeTimestamp(value: Date, writer: Writer): void {
+function writeTimestamp(value: Date, writer: PBWriter): void {
     if (!(value instanceof Date)) {
         return;
     }
@@ -61,7 +61,7 @@ function writeTimestamp(value: Date, writer: Writer): void {
     }
 }
 
-function decodeTimestampMessage(reader: Reader, length?: number): Date {
+function decodeTimestampMessage(reader: PBReader, length?: number): Date {
     const end = length === undefined ? reader.len : reader.pos + length;
     let seconds = 0;
     let nanos = 0;
@@ -84,7 +84,7 @@ function decodeTimestampMessage(reader: Reader, length?: number): Date {
 }
 {{- end}}
 {{- if .NeedsTimestampNative}}
-function writeTimestampFromMillis(value: number, writer: Writer): void {
+function writeTimestampFromMillis(value: number, writer: PBWriter): void {
     if (value === undefined || value === null || value === 0) {
         return;
     }
@@ -97,7 +97,7 @@ function writeTimestampFromMillis(value: number, writer: Writer): void {
     }
 }
 
-function decodeTimestampMillisMessage(reader: Reader, length?: number): number {
+function decodeTimestampMillisMessage(reader: PBReader, length?: number): number {
     const end = length === undefined ? reader.len : reader.pos + length;
     let seconds = 0;
     let nanos = 0;
@@ -119,7 +119,7 @@ function decodeTimestampMillisMessage(reader: Reader, length?: number): number {
     return (seconds * 1000) + Math.floor(nanos / 1e6);
 }
 
-function writeTimestampFromBigInt(value: bigint, writer: Writer): void {
+function writeTimestampFromBigInt(value: bigint, writer: PBWriter): void {
     if (value === undefined || value === null || value === 0n) {
         return;
     }
@@ -132,7 +132,7 @@ function writeTimestampFromBigInt(value: bigint, writer: Writer): void {
     }
 }
 
-function decodeTimestampBigIntMessage(reader: Reader, length?: number): bigint {
+function decodeTimestampBigIntMessage(reader: PBReader, length?: number): bigint {
     const end = length === undefined ? reader.len : reader.pos + length;
     let seconds = 0n;
     let nanos = 0;
@@ -155,7 +155,7 @@ function decodeTimestampBigIntMessage(reader: Reader, length?: number): bigint {
 }
 {{- end}}
 {{- if .NeedsDuration}}
-function writeDuration(value: number, writer: Writer): void {
+function writeDuration(value: number, writer: PBWriter): void {
     if (value === undefined || value === null || value === 0) {
         return;
     }
@@ -168,7 +168,7 @@ function writeDuration(value: number, writer: Writer): void {
     }
 }
 
-function decodeDurationMessage(reader: Reader, length?: number): number {
+function decodeDurationMessage(reader: PBReader, length?: number): number {
     const end = length === undefined ? reader.len : reader.pos + length;
     let seconds = 0;
     let nanos = 0;
@@ -191,7 +191,7 @@ function decodeDurationMessage(reader: Reader, length?: number): number {
 }
 {{- end}}
 {{- if .NeedsDurationBigInt}}
-function writeDurationFromBigInt(value: bigint, writer: Writer): void {
+function writeDurationFromBigInt(value: bigint, writer: PBWriter): void {
     if (value === undefined || value === null || value === 0n) {
         return;
     }
@@ -204,7 +204,7 @@ function writeDurationFromBigInt(value: bigint, writer: Writer): void {
     }
 }
 
-function decodeDurationBigIntMessage(reader: Reader, length?: number): bigint {
+function decodeDurationBigIntMessage(reader: PBReader, length?: number): bigint {
     const end = length === undefined ? reader.len : reader.pos + length;
     let seconds = 0n;
     let nanos = 0;
