@@ -40,5 +40,6 @@ extend google.protobuf.FieldOptions {
 
 extend google.protobuf.MethodOptions {
   bool go_custom = 50013;
+  string audit_id = 50031;
   AccessPolicy policy = 50030;
 }

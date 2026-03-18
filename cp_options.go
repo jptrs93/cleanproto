@@ -101,3 +101,12 @@ var E_GoCustom = &protoimpl.ExtensionInfo{
 	Tag:           "varint,50013,opt,name=go_custom",
 	Filename:      OptionsProtoPath,
 }
+
+var E_AuditId = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+	ExtensionType: (*string)(nil),
+	Field:         50031,
+	Name:          "cp.audit_id",
+	Tag:           "bytes,50031,opt,name=audit_id",
+	Filename:      OptionsProtoPath,
+}

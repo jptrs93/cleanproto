@@ -19,6 +19,7 @@ type Method struct {
 	InputFullName  string
 	OutputFullName string
 	GoCustom       bool
+	AuditID        string
 	PolicyType     int32
 	PolicyScopes   []string
 }

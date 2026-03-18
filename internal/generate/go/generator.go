@@ -104,11 +104,13 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		InputEmpty bool
 		OutEmpty   bool
 		GoCustom   bool
+		AuditID    string
 		NoAuth     bool
 		Scopes     []string
 		PolicyType int32
 	}
 	methods := make([]muxMethod, 0)
+	hasAudit := false
 	for _, svc := range file.Services {
 		for _, m := range svc.Methods {
 			httpMethod, path, ok := deriveHTTPGo(m.Name)
@@ -141,10 +143,14 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 				InputEmpty: in.Name == "Empty" || strings.HasSuffix(m.InputFullName, ".Empty"),
 				OutEmpty:   out.Name == "Empty" || strings.HasSuffix(m.OutputFullName, ".Empty"),
 				GoCustom:   m.GoCustom,
+				AuditID:    m.AuditID,
 				NoAuth:     m.PolicyType == 1,
 				Scopes:     append([]string(nil), m.PolicyScopes...),
 				PolicyType: m.PolicyType,
 			})
+			if m.AuditID != "" {
+				hasAudit = true
+			}
 		}
 	}
 	if len(methods) == 0 {
@@ -199,12 +205,21 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		}
 	}
 	b.WriteString("}\n\n")
-	b.WriteString("func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, middlewares ...MiddlewareFunc) *http.ServeMux {\n")
+	b.WriteString("func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc")
+	if hasAudit {
+		b.WriteString(", audit func(ctx context.Context, auditID string, err error, reqPayload, respPayload any)")
+	}
+	b.WriteString(", middlewares ...MiddlewareFunc) *http.ServeMux {\n")
 	b.WriteString("\tif verifyAuth == nil {\n")
 	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (context.Context, error) {\n")
 	b.WriteString("\t\t\treturn ctx, nil\n")
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t}\n")
+	if hasAudit {
+		b.WriteString("\tif audit == nil {\n")
+		b.WriteString("\t\taudit = func(context.Context, string, error, any, any) {}\n")
+		b.WriteString("\t}\n")
+	}
 	b.WriteString("\tm := http.NewServeMux()\n")
 	for _, m := range methods {
 		b.WriteString("\tm.HandleFunc(\"")
@@ -262,6 +277,17 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 				b.WriteString(m.Handler)
 				b.WriteString("(ctx, req)\n")
 			}
+			if m.AuditID != "" {
+				if m.InputEmpty {
+					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString(fmt.Sprintf("%q", m.AuditID))
+					b.WriteString(", err, nil, nil)\n")
+				} else {
+					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString(fmt.Sprintf("%q", m.AuditID))
+					b.WriteString(", err, req, nil)\n")
+				}
+			}
 			b.WriteString("\t\t\tif err != nil {\n")
 			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
 			b.WriteString("\t\t\t\treturn\n")
@@ -276,6 +302,17 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 				b.WriteString("\t\t\tres, err := h.")
 				b.WriteString(m.Handler)
 				b.WriteString("(ctx, req)\n")
+			}
+			if m.AuditID != "" {
+				if m.InputEmpty {
+					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString(fmt.Sprintf("%q", m.AuditID))
+					b.WriteString(", err, nil, res)\n")
+				} else {
+					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString(fmt.Sprintf("%q", m.AuditID))
+					b.WriteString(", err, req, res)\n")
+				}
 			}
 			b.WriteString("\t\t\tRespond(ctx, r, w, res, err)\n")
 		}

@@ -24,6 +24,7 @@ var E_TsType = cp.E_TsType
 var E_TsEncode = cp.E_TsEncode
 var E_TsIgnore = cp.E_TsIgnore
 var E_GoCustom = cp.E_GoCustom
+var E_AuditId = cp.E_AuditId
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
@@ -165,6 +166,22 @@ func goCustomFromMethodOptions(method protoreflect.MethodDescriptor) (bool, erro
 		return false, nil
 	}
 	return b, nil
+}
+
+func auditIDFromMethodOptions(method protoreflect.MethodDescriptor) (string, error) {
+	opts, ok := method.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return "", nil
+	}
+	if !proto.HasExtension(opts, E_AuditId) {
+		return "", nil
+	}
+	val := proto.GetExtension(opts, E_AuditId)
+	str, ok := val.(string)
+	if !ok || str == "" {
+		return "", nil
+	}
+	return str, nil
 }
 
 func policyFromMethodOptions(method protoreflect.MethodDescriptor) (int32, []string, error) {

@@ -195,6 +195,10 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 			if err != nil {
 				return nil, err
 			}
+			auditID, err := auditIDFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
 			policyType, policyScopes, err := policyFromMethodOptions(m)
 			if err != nil {
 				return nil, err
@@ -204,6 +208,7 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 				InputFullName:  string(m.Input().FullName()),
 				OutputFullName: string(m.Output().FullName()),
 				GoCustom:       goCustom,
+				AuditID:        auditID,
 				PolicyType:     policyType,
 				PolicyScopes:   policyScopes,
 			})
