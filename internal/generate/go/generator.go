@@ -62,7 +62,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			if muxUtilDir == "" {
 				muxUtilDir = goOut
 			}
-			muxContent, err := buildGoMuxFile(file, msgIndex, pkg)
+			muxContent, err := buildGoMuxFile(file, msgIndex, pkg, options.GoCtxType)
 			if err != nil {
 				return nil, err
 			}
@@ -93,7 +93,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	return outputs, nil
 }
 
-func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (string, error) {
+func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, goCtxType string) (string, error) {
 	type muxMethod struct {
 		Name       string
 		Handler    string
@@ -156,6 +156,10 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 	if len(methods) == 0 {
 		return "", nil
 	}
+	ctxType := strings.TrimSpace(goCtxType)
+	if ctxType == "" {
+		ctxType = "context.Context"
+	}
 
 	var b strings.Builder
 	b.WriteString("package ")
@@ -167,7 +171,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 	b.WriteString(")\n\n")
 	b.WriteString("type HandlerFunc = func(context.Context, http.ResponseWriter, *http.Request)\n")
 	b.WriteString("type MiddlewareFunc func(next HandlerFunc) HandlerFunc\n\n")
-	b.WriteString("type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (context.Context, error)\n\n")
+	b.WriteString("type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (")
+	b.WriteString(ctxType)
+	b.WriteString(", error)\n\n")
 	b.WriteString("func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.HandlerFunc {\n")
 	b.WriteString("\tfor _, m := range middlewares {\n")
 	b.WriteString("\t\th = m(h)\n")
@@ -181,7 +187,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		if m.GoCustom {
 			b.WriteString("\t")
 			b.WriteString(m.Handler)
-			b.WriteString("(context.Context")
+			b.WriteString("(")
+			b.WriteString(ctxType)
 			if !m.InputEmpty {
 				b.WriteString(", *")
 				b.WriteString(m.Input)
@@ -191,7 +198,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		}
 		b.WriteString("\t")
 		b.WriteString(m.Handler)
-		b.WriteString("(context.Context")
+		b.WriteString("(")
+		b.WriteString(ctxType)
 		if !m.InputEmpty {
 			b.WriteString(", *")
 			b.WriteString(m.Input)
@@ -207,17 +215,35 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 	b.WriteString("}\n\n")
 	b.WriteString("func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc")
 	if hasAudit {
-		b.WriteString(", audit func(ctx context.Context, auditID string, err error, reqPayload, respPayload any) error")
+		b.WriteString(", audit func(ctx ")
+		b.WriteString(ctxType)
+		b.WriteString(", auditID string, err error, reqPayload, respPayload any) error")
 	}
 	b.WriteString(", middlewares ...MiddlewareFunc) *http.ServeMux {\n")
 	b.WriteString("\tif verifyAuth == nil {\n")
-	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (context.Context, error) {\n")
-	b.WriteString("\t\t\treturn ctx, nil\n")
+	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (")
+	b.WriteString(ctxType)
+	b.WriteString(", error) {\n")
+	if ctxType == "context.Context" {
+		b.WriteString("\t\t\treturn ctx, nil\n")
+	} else {
+		b.WriteString("\t\t\tvar authCtx ")
+		b.WriteString(ctxType)
+		b.WriteString("\n")
+		b.WriteString("\t\t\tif v, ok := ctx.(")
+		b.WriteString(ctxType)
+		b.WriteString("); ok {\n")
+		b.WriteString("\t\t\t\tauthCtx = v\n")
+		b.WriteString("\t\t\t}\n")
+		b.WriteString("\t\t\treturn authCtx, nil\n")
+	}
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t}\n")
 	if hasAudit {
 		b.WriteString("\tif audit == nil {\n")
-		b.WriteString("\t\taudit = func(context.Context, string, error, any, any) error { return nil }\n")
+		b.WriteString("\t\taudit = func(")
+		b.WriteString(ctxType)
+		b.WriteString(", string, error, any, any) error { return nil }\n")
 		b.WriteString("\t}\n")
 	}
 	b.WriteString("\tm := http.NewServeMux()\n")
@@ -227,32 +253,48 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 		b.WriteString(" ")
 		b.WriteString(m.Path)
 		b.WriteString("\", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {\n")
-		b.WriteString("\t\t\tctx, err := verifyAuth(ctx, r, ")
+		if ctxType == "context.Context" {
+			b.WriteString("\t\t\tctx, err := verifyAuth(ctx, r, ")
+		} else {
+			b.WriteString("\t\t\tauthCtx, err := verifyAuth(ctx, r, ")
+		}
 		b.WriteString(policyLiteral(m.PolicyType, m.Scopes))
 		b.WriteString(")\n")
 		b.WriteString("\t\t\tif err != nil {\n")
 		b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
 		b.WriteString("\t\t\t\treturn\n")
 		b.WriteString("\t\t\t}\n")
+		handlerCtxName := "ctx"
+		if ctxType != "context.Context" {
+			handlerCtxName = "authCtx"
+		}
 		if m.GoCustom {
 			if m.InputEmpty {
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx, r, w)\n")
+				b.WriteString("(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", r, w)\n")
 			} else {
 				b.WriteString("\t\t\treq, err := decodeBody(r, Decode")
 				b.WriteString(m.Input)
 				b.WriteString(")\n")
 				b.WriteString("\t\t\tif err != nil {\n")
-				b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+				b.WriteString("\t\t\t\tHandleReqErr(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", err, r, w)\n")
 				b.WriteString("\t\t\t\treturn\n")
 				b.WriteString("\t\t\t}\n")
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx, req, r, w)\n")
+				b.WriteString("(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", req, r, w)\n")
 			}
 			b.WriteString("\t\t\tif err != nil {\n")
-			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+			b.WriteString("\t\t\t\tHandleReqErr(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", err, r, w)\n")
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
 			b.WriteString("\t\t}, middlewares...))\n")
@@ -263,7 +305,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			b.WriteString(m.Input)
 			b.WriteString(")\n")
 			b.WriteString("\t\t\tif err != nil {\n")
-			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+			b.WriteString("\t\t\t\tHandleReqErr(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", err, r, w)\n")
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
 		}
@@ -271,25 +315,35 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			if m.InputEmpty {
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx)\n")
+				b.WriteString("(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(")\n")
 			} else {
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx, req)\n")
+				b.WriteString("(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", req)\n")
 			}
 			if m.AuditID != "" {
 				if m.InputEmpty {
-					b.WriteString("\t\t\terr = audit(ctx, ")
+					b.WriteString("\t\t\terr = audit(")
+					b.WriteString(handlerCtxName)
+					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, nil, nil)\n")
 				} else {
-					b.WriteString("\t\t\terr = audit(ctx, ")
+					b.WriteString("\t\t\terr = audit(")
+					b.WriteString(handlerCtxName)
+					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, req, nil)\n")
 				}
 			}
 			b.WriteString("\t\t\tif err != nil {\n")
-			b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+			b.WriteString("\t\t\t\tHandleReqErr(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", err, r, w)\n")
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
 			b.WriteString("\t\t\tw.WriteHeader(http.StatusNoContent)\n")
@@ -297,24 +351,34 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			if m.InputEmpty {
 				b.WriteString("\t\t\tres, err := h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx)\n")
+				b.WriteString("(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(")\n")
 			} else {
 				b.WriteString("\t\t\tres, err := h.")
 				b.WriteString(m.Handler)
-				b.WriteString("(ctx, req)\n")
+				b.WriteString("(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", req)\n")
 			}
 			if m.AuditID != "" {
 				if m.InputEmpty {
-					b.WriteString("\t\t\terr = audit(ctx, ")
+					b.WriteString("\t\t\terr = audit(")
+					b.WriteString(handlerCtxName)
+					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, nil, res)\n")
 				} else {
-					b.WriteString("\t\t\terr = audit(ctx, ")
+					b.WriteString("\t\t\terr = audit(")
+					b.WriteString(handlerCtxName)
+					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, req, res)\n")
 				}
 			}
-			b.WriteString("\t\t\tRespond(ctx, r, w, res, err)\n")
+			b.WriteString("\t\t\tRespond(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", r, w, res, err)\n")
 		}
 		b.WriteString("\t\t}, middlewares...))\n")
 	}

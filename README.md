@@ -25,6 +25,7 @@ cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out
 | `-proto_path <dir>` | No | Proto import path. Repeatable. | `.` |
 | `-go.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated Go files. | none |
 | `-go.jsontags <style>` | No | Go JSON tags style. Supported: `snake`. | none |
+| `-go.ctxtype <type>` | No | Go server auth context type for handler interface, verifyAuth return, and audit callback when server stubs are generated. | `context.Context` |
 | `-js.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated JavaScript files. | none |
 | `-ts.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated TypeScript files. | none |
 

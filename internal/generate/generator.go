@@ -12,6 +12,7 @@ type Options struct {
 	JsOut      string
 	TsOut      string
 	GoJSONTags string
+	GoCtxType  string
 }
 
 type Generator interface {

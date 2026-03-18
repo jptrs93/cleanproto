@@ -31,12 +31,14 @@ func main() {
 	var jsOut string
 	var tsOut string
 	var goJSONTags string
+	var goCtxType string
 
 	flag.Var(&importPaths, "proto_path", "proto import path (repeatable)")
 	flag.StringVar(&goOut, "go.out", "", "output directory for Go")
 	flag.StringVar(&jsOut, "js.out", "", "output directory for JS")
 	flag.StringVar(&tsOut, "ts.out", "", "output directory for TS")
 	flag.StringVar(&goJSONTags, "go.jsontags", "", "Go JSON tags style (snake)")
+	flag.StringVar(&goCtxType, "go.ctxtype", "", "Go server auth context type override")
 	flag.Parse()
 
 	if len(flag.Args()) == 0 {
@@ -68,6 +70,7 @@ func main() {
 		JsOut:      cleanPath(jsOut),
 		TsOut:      cleanPath(tsOut),
 		GoJSONTags: goJSONTags,
+		GoCtxType:  goCtxType,
 	}
 
 	generators := []generate.Generator{
