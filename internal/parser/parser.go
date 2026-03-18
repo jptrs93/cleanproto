@@ -320,6 +320,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		var goIgnore bool
 		var jsIgnore bool
 		var tsIgnore bool
+		var jsonIgnore bool
 		if field.IsMap() {
 			isMap = true
 			keyKind, err := kindFromField(field.MapKey())
@@ -385,6 +386,10 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		if err != nil {
 			return nil, err
 		}
+		jsonIgnore, err = jsonIgnoreFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
 		if err := validateNativeTypes(field.FullName(), kind, msgName, goType, jsType, tsType, field.IsMap()); err != nil {
 			return nil, err
 		}
@@ -408,6 +413,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			JsIgnore:        jsIgnore,
 			TsEncode:        tsEncode,
 			TsIgnore:        tsIgnore,
+			JSONIgnore:      jsonIgnore,
 			MapKeyKind:      mapKeyKind,
 			MapValueKind:    mapValueKind,
 			MapValueMessage: mapValueMessage,

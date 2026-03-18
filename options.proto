@@ -36,6 +36,8 @@ extend google.protobuf.FieldOptions {
   string ts_type = 50016;
   bool ts_encode = 50017;
   bool ts_ignore = 50018;
+
+  bool json_ignore = 50019;
 }
 
 extend google.protobuf.MethodOptions {

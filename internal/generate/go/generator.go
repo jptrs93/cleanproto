@@ -534,7 +534,9 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex ma
 			usesUUID = true
 		}
 		jsonTag := ""
-		if goJSONTags == "snake" {
+		if field.JSONIgnore {
+			jsonTag = "-"
+		} else if goJSONTags == "snake" {
 			jsonTag = toSnakeCase(field.Name)
 			if goJSONTagOmitEmpty(field) {
 				jsonTag += ",omitempty"

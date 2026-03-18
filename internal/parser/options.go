@@ -23,6 +23,7 @@ var E_JsIgnore = cp.E_JsIgnore
 var E_TsType = cp.E_TsType
 var E_TsEncode = cp.E_TsEncode
 var E_TsIgnore = cp.E_TsIgnore
+var E_JsonIgnore = cp.E_JsonIgnore
 var E_GoCustom = cp.E_GoCustom
 var E_AuditId = cp.E_AuditId
 
@@ -145,6 +146,19 @@ func tsIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) 
 		return false, nil
 	}
 	val := proto.GetExtension(opts, E_TsIgnore)
+	b, ok := val.(bool)
+	if !ok {
+		return false, nil
+	}
+	return b, nil
+}
+
+func jsonIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return false, nil
+	}
+	val := proto.GetExtension(opts, E_JsonIgnore)
 	b, ok := val.(bool)
 	if !ok {
 		return false, nil

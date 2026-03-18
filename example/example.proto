@@ -57,4 +57,5 @@ message NativeTypeCoverage {
   google.protobuf.Timestamp ts_date_from_timestamp = 26 [(cp.ts_type) = "Date"];
   int32 ts_encode_false = 27 [(cp.ts_encode) = false];
   int32 ts_ignore_true = 28 [(cp.ts_ignore) = true];
+  int32 json_ignore_true = 29 [(cp.json_ignore) = true];
 }

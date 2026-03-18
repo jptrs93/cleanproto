@@ -60,6 +60,7 @@ type Field struct {
 	JsIgnore        bool
 	TsEncode        bool
 	TsIgnore        bool
+	JSONIgnore      bool
 	MapKeyKind      Kind
 	MapValueKind    Kind
 	MapValueMessage string

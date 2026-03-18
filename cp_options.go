@@ -93,6 +93,15 @@ var E_TsIgnore = &protoimpl.ExtensionInfo{
 	Filename:      OptionsProtoPath,
 }
 
+var E_JsonIgnore = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50019,
+	Name:          "cp.json_ignore",
+	Tag:           "varint,50019,opt,name=json_ignore",
+	Filename:      OptionsProtoPath,
+}
+
 var E_GoCustom = &protoimpl.ExtensionInfo{
 	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
 	ExtensionType: (*bool)(nil),

@@ -80,6 +80,7 @@ This generates models where the `timestamp` field has the type `Date` and `time.
 | `cp.js_ignore = true` | Omit the field completely from generated JavaScript models and their encode/decoding. |
 | `cp.ts_encode = false` | Keep the field in generated TypeScript models, but skip writing it during TS encoding. |
 | `cp.ts_ignore = true` | Omit the field completely from generated TypeScript models and their encode/decoding. |
+| `cp.json_ignore = true` | Keep the field in generated Go models but force a `json:"-"` struct tag so it is omitted by JSON marshalling. |
 
 
 
