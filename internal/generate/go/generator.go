@@ -207,7 +207,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 	b.WriteString("}\n\n")
 	b.WriteString("func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc")
 	if hasAudit {
-		b.WriteString(", audit func(ctx context.Context, auditID string, err error, reqPayload, respPayload any)")
+		b.WriteString(", audit func(ctx context.Context, auditID string, err error, reqPayload, respPayload any) error")
 	}
 	b.WriteString(", middlewares ...MiddlewareFunc) *http.ServeMux {\n")
 	b.WriteString("\tif verifyAuth == nil {\n")
@@ -217,7 +217,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 	b.WriteString("\t}\n")
 	if hasAudit {
 		b.WriteString("\tif audit == nil {\n")
-		b.WriteString("\t\taudit = func(context.Context, string, error, any, any) {}\n")
+		b.WriteString("\t\taudit = func(context.Context, string, error, any, any) error { return nil }\n")
 		b.WriteString("\t}\n")
 	}
 	b.WriteString("\tm := http.NewServeMux()\n")
@@ -279,11 +279,11 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			}
 			if m.AuditID != "" {
 				if m.InputEmpty {
-					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString("\t\t\terr = audit(ctx, ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, nil, nil)\n")
 				} else {
-					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString("\t\t\terr = audit(ctx, ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, req, nil)\n")
 				}
@@ -305,11 +305,11 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (s
 			}
 			if m.AuditID != "" {
 				if m.InputEmpty {
-					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString("\t\t\terr = audit(ctx, ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, nil, res)\n")
 				} else {
-					b.WriteString("\t\t\taudit(ctx, ")
+					b.WriteString("\t\t\terr = audit(ctx, ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, req, res)\n")
 				}
