@@ -536,6 +536,9 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex ma
 		jsonTag := ""
 		if goJSONTags == "snake" {
 			jsonTag = toSnakeCase(field.Name)
+			if goJSONTagOmitEmpty(field) {
+				jsonTag += ",omitempty"
+			}
 		}
 		out.Fields = append(out.Fields, goField{
 			Name:       ir.GoName(field.Name),
@@ -591,6 +594,13 @@ func toSnakeCase(name string) string {
 		out.WriteRune(unicode.ToLower(r))
 	}
 	return out.String()
+}
+
+func goJSONTagOmitEmpty(field ir.Field) bool {
+	if field.IsMap || field.IsRepeated || field.IsOptional {
+		return true
+	}
+	return field.Kind == ir.KindString
 }
 
 func goFieldType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (string, bool, error) {
