@@ -3,11 +3,13 @@ package protowireu
 import (
 	"errors"
 	"math"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
 var errInvalidWireType = errors.New("invalid wire type")
+var errInvalidUTF8 = errors.New("invalid UTF-8")
 
 func ConsumeTag(b []byte) ([]byte, protowire.Number, protowire.Type, error) {
 	num, typ, n := protowire.ConsumeTag(b)
@@ -198,6 +200,9 @@ func ConsumeString(b []byte, typ protowire.Type) ([]byte, string, error) {
 	v, n := protowire.ConsumeBytes(b)
 	if err := protowire.ParseError(n); err != nil {
 		return nil, "", err
+	}
+	if !utf8.Valid(v) {
+		return nil, "", errInvalidUTF8
 	}
 	return b[n:], string(v), nil
 }

@@ -2125,7 +2125,7 @@ func EncodeTimestamp(t time.Time) []byte {
 	b = protowire.AppendVarint(b, uint64(seconds))
 	if nanos != 0 {
 		b = protowire.AppendTag(b, 2, protowire.VarintType)
-		b = protowire.AppendVarint(b, uint64(uint32(nanos)))
+		b = protowire.AppendVarint(b, uint64(int64(nanos)))
 	}
 	return b
 }
@@ -2264,7 +2264,7 @@ func EncodeDuration(d time.Duration) []byte {
 	b = protowire.AppendVarint(b, uint64(seconds))
 	if nanos != 0 {
 		b = protowire.AppendTag(b, 2, protowire.VarintType)
-		b = protowire.AppendVarint(b, uint64(uint32(nanos)))
+		b = protowire.AppendVarint(b, uint64(int64(nanos)))
 	}
 	return b
 }

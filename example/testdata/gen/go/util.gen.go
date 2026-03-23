@@ -5,11 +5,13 @@ import (
 	"github.com/google/uuid"
 	"math"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
 var errInvalidWireType = errors.New("invalid wire type")
+var errInvalidUTF8 = errors.New("invalid UTF-8")
 
 func ConsumeTag(b []byte) ([]byte, protowire.Number, protowire.Type, error) {
 	num, typ, n := protowire.ConsumeTag(b)
@@ -201,6 +203,9 @@ func ConsumeString(b []byte, typ protowire.Type) ([]byte, string, error) {
 	if err := protowire.ParseError(n); err != nil {
 		return nil, "", err
 	}
+	if !utf8.Valid(v) {
+		return nil, "", errInvalidUTF8
+	}
 	return b[n:], string(v), nil
 }
 
@@ -219,7 +224,7 @@ func EncodeTimestamp(t time.Time) []byte {
 	b = protowire.AppendVarint(b, uint64(seconds))
 	if nanos != 0 {
 		b = protowire.AppendTag(b, 2, protowire.VarintType)
-		b = protowire.AppendVarint(b, uint64(uint32(nanos)))
+		b = protowire.AppendVarint(b, uint64(int64(nanos)))
 	}
 	return b
 }
