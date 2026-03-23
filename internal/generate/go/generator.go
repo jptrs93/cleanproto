@@ -217,7 +217,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 	if hasAudit {
 		b.WriteString(", audit func(ctx ")
 		b.WriteString(ctxType)
-		b.WriteString(", auditID string, err error, reqPayload, respPayload any) error")
+		b.WriteString(", auditID string, err error, reqPayload, respPayload any)")
 	}
 	b.WriteString(", middlewares ...MiddlewareFunc) *http.ServeMux {\n")
 	b.WriteString("\tif verifyAuth == nil {\n")
@@ -243,7 +243,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		b.WriteString("\tif audit == nil {\n")
 		b.WriteString("\t\taudit = func(")
 		b.WriteString(ctxType)
-		b.WriteString(", string, error, any, any) error { return nil }\n")
+		b.WriteString(", string, error, any, any) {}\n")
 		b.WriteString("\t}\n")
 	}
 	b.WriteString("\tm := http.NewServeMux()\n")
@@ -327,13 +327,13 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			}
 			if m.AuditID != "" {
 				if m.InputEmpty {
-					b.WriteString("\t\t\terr = audit(")
+					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, nil, nil)\n")
 				} else {
-					b.WriteString("\t\t\terr = audit(")
+					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
@@ -363,13 +363,13 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			}
 			if m.AuditID != "" {
 				if m.InputEmpty {
-					b.WriteString("\t\t\terr = audit(")
+					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
 					b.WriteString(", err, nil, res)\n")
 				} else {
-					b.WriteString("\t\t\terr = audit(")
+					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", m.AuditID))
