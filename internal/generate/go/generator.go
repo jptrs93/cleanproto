@@ -174,6 +174,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 	b.WriteString("type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (")
 	b.WriteString(ctxType)
 	b.WriteString(", error)\n\n")
+	b.WriteString("type MuxOptions struct {\n")
+	b.WriteString("\tMaxRequestBodySize *int\n")
+	b.WriteString("}\n\n")
 	b.WriteString("func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.HandlerFunc {\n")
 	b.WriteString("\tfor _, m := range middlewares {\n")
 	b.WriteString("\t\th = m(h)\n")
@@ -219,7 +222,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		b.WriteString(ctxType)
 		b.WriteString(", auditID string, err error, reqPayload, respPayload any)")
 	}
-	b.WriteString(", middlewares ...MiddlewareFunc) *http.ServeMux {\n")
+	b.WriteString(", options *MuxOptions, middlewares ...MiddlewareFunc) *http.ServeMux {\n")
 	b.WriteString("\tif verifyAuth == nil {\n")
 	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (")
 	b.WriteString(ctxType)
@@ -246,6 +249,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		b.WriteString(", string, error, any, any) {}\n")
 		b.WriteString("\t}\n")
 	}
+	b.WriteString("\tif options == nil {\n")
+	b.WriteString("\t\toptions = &MuxOptions{}\n")
+	b.WriteString("\t}\n")
 	b.WriteString("\tm := http.NewServeMux()\n")
 	for _, m := range methods {
 		b.WriteString("\tm.HandleFunc(\"")
@@ -276,7 +282,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				b.WriteString(handlerCtxName)
 				b.WriteString(", r, w)\n")
 			} else {
-				b.WriteString("\t\t\treq, err := decodeBody(r, Decode")
+				b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, Decode")
 				b.WriteString(m.Input)
 				b.WriteString(")\n")
 				b.WriteString("\t\t\tif err != nil {\n")
@@ -301,7 +307,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			continue
 		}
 		if !m.InputEmpty {
-			b.WriteString("\t\t\treq, err := decodeBody(r, Decode")
+			b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, Decode")
 			b.WriteString(m.Input)
 			b.WriteString(")\n")
 			b.WriteString("\t\t\tif err != nil {\n")
@@ -2097,6 +2103,21 @@ func decodeBody[T any](r *http.Request, decode func([]byte) (*T, error)) (*T, er
 	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
+	}
+	return decode(b)
+}
+
+func decodeWithMaxBodySize[T any](r *http.Request, maxRequestBodySize *int, decode func([]byte) (*T, error)) (*T, error) {
+	if maxRequestBodySize == nil {
+		return decodeBody(r, decode)
+	}
+	limit := int64(*maxRequestBodySize)
+	b, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, ApiErr{DisplayErr: "Request body too large", InternalErr: "request body exceeds max size", Code: http.StatusRequestEntityTooLarge}
 	}
 	return decode(b)
 }

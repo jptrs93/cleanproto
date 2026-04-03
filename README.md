@@ -442,6 +442,10 @@ type MiddlewareFunc func(next HandlerFunc) HandlerFunc
 
 type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (context.Context, error)
 
+type MuxOptions struct {
+    MaxRequestBodySize *int
+}
+
 func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.HandlerFunc {
     for _, m := range middlewares {
         h = m(h)
@@ -457,11 +461,14 @@ type ServerHandler interface {
     PostLibraryBookCheckoutV1(context.Context, *CheckoutBookReq) error
 }
 
-func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, middlewares ...MiddlewareFunc) *http.ServeMux {
+func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, options *MuxOptions, middlewares ...MiddlewareFunc) *http.ServeMux {
     if verifyAuth == nil {
         verifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (context.Context, error) {
             return ctx, nil
         }
+    }
+    if options == nil {
+        options = &MuxOptions{}
     }
     m := http.NewServeMux()
     m.HandleFunc("GET /v1/library", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
@@ -479,7 +486,7 @@ func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, middlewares ...Middle
             HandleReqErr(ctx, err, r, w)
             return
         }
-        req, err := decodeBody(r, DecodeGetBookReq)
+        req, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, DecodeGetBookReq)
         if err != nil {
             HandleReqErr(ctx, err, r, w)
             return
@@ -493,7 +500,7 @@ func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, middlewares ...Middle
             HandleReqErr(ctx, err, r, w)
             return
         }
-        req, err := decodeBody(r, DecodeCheckoutBookReq)
+        req, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, DecodeCheckoutBookReq)
         if err != nil {
             HandleReqErr(ctx, err, r, w)
             return
@@ -540,7 +547,7 @@ func (server) PostLibraryBookCheckoutV1(context.Context, *example.CheckoutBookRe
 }
 
 func main() {
-    mux := example.CreateMux(server{}, nil)
+    mux := example.CreateMux(server{}, nil, nil)
     log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```

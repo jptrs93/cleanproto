@@ -57,6 +57,21 @@ func decodeBody[T any](r *http.Request, decode func([]byte) (*T, error)) (*T, er
 	return decode(b)
 }
 
+func decodeWithMaxBodySize[T any](r *http.Request, maxRequestBodySize *int, decode func([]byte) (*T, error)) (*T, error) {
+	if maxRequestBodySize == nil {
+		return decodeBody(r, decode)
+	}
+	limit := int64(*maxRequestBodySize)
+	b, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, ApiErr{DisplayErr: "Request body too large", InternalErr: "request body exceeds max size", Code: http.StatusRequestEntityTooLarge}
+	}
+	return decode(b)
+}
+
 func NewApiErr(displayErr string, internalErr string, code int32) ApiErr {
 	return ApiErr{DisplayErr: displayErr, InternalErr: internalErr, Code: code}
 }
