@@ -102,6 +102,15 @@ var E_JsonIgnore = &protoimpl.ExtensionInfo{
 	Filename:      OptionsProtoPath,
 }
 
+var E_AuditIgnore = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50020,
+	Name:          "cp.audit_ignore",
+	Tag:           "varint,50020,opt,name=audit_ignore",
+	Filename:      OptionsProtoPath,
+}
+
 var E_GoCustom = &protoimpl.ExtensionInfo{
 	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
 	ExtensionType: (*bool)(nil),
@@ -111,11 +120,20 @@ var E_GoCustom = &protoimpl.ExtensionInfo{
 	Filename:      OptionsProtoPath,
 }
 
-var E_AuditId = &protoimpl.ExtensionInfo{
+var E_OperationId = &protoimpl.ExtensionInfo{
 	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
 	ExtensionType: (*string)(nil),
 	Field:         50031,
-	Name:          "cp.audit_id",
-	Tag:           "bytes,50031,opt,name=audit_id",
+	Name:          "cp.operation_id",
+	Tag:           "bytes,50031,opt,name=operation_id",
+	Filename:      OptionsProtoPath,
+}
+
+var E_Audit = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50032,
+	Name:          "cp.audit",
+	Tag:           "varint,50032,opt,name=audit",
 	Filename:      OptionsProtoPath,
 }

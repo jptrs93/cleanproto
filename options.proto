@@ -38,10 +38,12 @@ extend google.protobuf.FieldOptions {
   bool ts_ignore = 50018;
 
   bool json_ignore = 50019;
+  bool audit_ignore = 50020;
 }
 
 extend google.protobuf.MethodOptions {
   bool go_custom = 50013;
-  string audit_id = 50031;
+  string operation_id = 50031;
+  bool audit = 50032;
   AccessPolicy policy = 50030;
 }

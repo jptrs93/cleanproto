@@ -15,13 +15,15 @@ type Service struct {
 }
 
 type Method struct {
-	Name           string
-	InputFullName  string
-	OutputFullName string
-	GoCustom       bool
-	AuditID        string
-	PolicyType     int32
-	PolicyScopes   []string
+	Name              string
+	InputFullName     string
+	OutputFullName    string
+	GoCustom          bool
+	OperationID       string
+	Audit             bool
+	IsStreamingServer bool
+	PolicyType        int32
+	PolicyScopes      []string
 }
 
 type Enum struct {
@@ -61,6 +63,7 @@ type Field struct {
 	TsEncode        bool
 	TsIgnore        bool
 	JSONIgnore      bool
+	AuditIgnore     bool
 	MapKeyKind      Kind
 	MapValueKind    Kind
 	MapValueMessage string

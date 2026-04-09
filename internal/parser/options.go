@@ -24,8 +24,10 @@ var E_TsType = cp.E_TsType
 var E_TsEncode = cp.E_TsEncode
 var E_TsIgnore = cp.E_TsIgnore
 var E_JsonIgnore = cp.E_JsonIgnore
+var E_AuditIgnore = cp.E_AuditIgnore
 var E_GoCustom = cp.E_GoCustom
-var E_AuditId = cp.E_AuditId
+var E_OperationId = cp.E_OperationId
+var E_Audit = cp.E_Audit
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
@@ -182,20 +184,49 @@ func goCustomFromMethodOptions(method protoreflect.MethodDescriptor) (bool, erro
 	return b, nil
 }
 
-func auditIDFromMethodOptions(method protoreflect.MethodDescriptor) (string, error) {
+func operationIDFromMethodOptions(method protoreflect.MethodDescriptor) (string, error) {
 	opts, ok := method.Options().(*descriptorpb.MethodOptions)
 	if !ok || opts == nil {
 		return "", nil
 	}
-	if !proto.HasExtension(opts, E_AuditId) {
+	if !proto.HasExtension(opts, E_OperationId) {
 		return "", nil
 	}
-	val := proto.GetExtension(opts, E_AuditId)
+	val := proto.GetExtension(opts, E_OperationId)
 	str, ok := val.(string)
 	if !ok || str == "" {
 		return "", nil
 	}
 	return str, nil
+}
+
+func auditFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) {
+	opts, ok := method.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return false, nil
+	}
+	if !proto.HasExtension(opts, E_Audit) {
+		return false, nil
+	}
+	val := proto.GetExtension(opts, E_Audit)
+	b, ok := val.(bool)
+	if !ok {
+		return false, nil
+	}
+	return b, nil
+}
+
+func auditIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return false, nil
+	}
+	val := proto.GetExtension(opts, E_AuditIgnore)
+	b, ok := val.(bool)
+	if !ok {
+		return false, nil
+	}
+	return b, nil
 }
 
 func policyFromMethodOptions(method protoreflect.MethodDescriptor) (int32, []string, error) {

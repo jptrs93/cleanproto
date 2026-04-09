@@ -191,11 +191,18 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 		methods := make([]ir.Method, 0, svc.Methods().Len())
 		for j := 0; j < svc.Methods().Len(); j++ {
 			m := svc.Methods().Get(j)
+			if m.IsStreamingClient() {
+				return nil, fmt.Errorf("client streaming is not supported: %s", m.FullName())
+			}
 			goCustom, err := goCustomFromMethodOptions(m)
 			if err != nil {
 				return nil, err
 			}
-			auditID, err := auditIDFromMethodOptions(m)
+			operationID, err := operationIDFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
+			audit, err := auditFromMethodOptions(m)
 			if err != nil {
 				return nil, err
 			}
@@ -204,13 +211,15 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 				return nil, err
 			}
 			methods = append(methods, ir.Method{
-				Name:           string(m.Name()),
-				InputFullName:  string(m.Input().FullName()),
-				OutputFullName: string(m.Output().FullName()),
-				GoCustom:       goCustom,
-				AuditID:        auditID,
-				PolicyType:     policyType,
-				PolicyScopes:   policyScopes,
+				Name:              string(m.Name()),
+				InputFullName:     string(m.Input().FullName()),
+				OutputFullName:    string(m.Output().FullName()),
+				GoCustom:          goCustom,
+				OperationID:       operationID,
+				Audit:             audit,
+				IsStreamingServer: m.IsStreamingServer(),
+				PolicyType:        policyType,
+				PolicyScopes:      policyScopes,
 			})
 		}
 		outSvc.Methods = methods
@@ -321,6 +330,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		var jsIgnore bool
 		var tsIgnore bool
 		var jsonIgnore bool
+		var auditIgnore bool
 		if field.IsMap() {
 			isMap = true
 			keyKind, err := kindFromField(field.MapKey())
@@ -390,6 +400,10 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 		if err != nil {
 			return nil, err
 		}
+		auditIgnore, err = auditIgnoreFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
 		if err := validateNativeTypes(field.FullName(), kind, msgName, goType, jsType, tsType, field.IsMap()); err != nil {
 			return nil, err
 		}
@@ -414,6 +428,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			TsEncode:        tsEncode,
 			TsIgnore:        tsIgnore,
 			JSONIgnore:      jsonIgnore,
+			AuditIgnore:     auditIgnore,
 			MapKeyKind:      mapKeyKind,
 			MapValueKind:    mapValueKind,
 			MapValueMessage: mapValueMessage,
