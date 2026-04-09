@@ -378,7 +378,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString("\t\t\t\t}\n")
 			b.WriteString("\t\t\t\tif !firstHandled {\n")
 			b.WriteString("\t\t\t\t\tfirstHandled = true\n")
-			b.WriteString("\t\t\t\t\tw.Header().Set(\"Content-Type\", \"application/protobuf-stream\")\n")
+			b.WriteString("\t\t\t\t\tSetStreamHeaders(w)\n")
 			b.WriteString("\t\t\t\t}\n")
 			b.WriteString("\t\t\t\tif werr := WriteStreamFrame(w, resp.Encode()); werr != nil {\n")
 			b.WriteString("\t\t\t\t\tstreamErr = werr\n")
@@ -418,7 +418,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString("\t\t\t\tpanic(http.ErrAbortHandler)\n")
 			b.WriteString("\t\t\t}\n")
 			b.WriteString("\t\t\tif !firstHandled {\n")
-			b.WriteString("\t\t\t\tw.Header().Set(\"Content-Type\", \"application/protobuf-stream\")\n")
+			b.WriteString("\t\t\t\tSetStreamHeaders(w)\n")
 			b.WriteString("\t\t\t\tw.WriteHeader(http.StatusOK)\n")
 			b.WriteString("\t\t\t}\n")
 			b.WriteString("\t\t}, middlewares...))\n")
@@ -2515,6 +2515,18 @@ func WriteStreamFrame(w io.Writer, payload []byte) error {
 		}
 	}
 	return nil
+}
+
+// SetStreamHeaders sets the response headers for a server-streaming RPC.
+// In addition to the protobuf-stream content type, it disables intermediate
+// buffering: nginx and similar reverse proxies respect "X-Accel-Buffering: no",
+// and "Cache-Control: no-cache" prevents caching layers from holding onto the
+// response. Caching also implies the proxy must not transform the body.
+func SetStreamHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "application/protobuf-stream")
+	h.Set("Cache-Control", "no-cache, no-transform")
+	h.Set("X-Accel-Buffering", "no")
 }
 
 func NewApiErr(displayErr string, internalErr string, code int32) ApiErr {
