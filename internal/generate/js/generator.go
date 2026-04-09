@@ -192,16 +192,16 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	b.WriteString("  }\n\n")
 	b.WriteString("  /**\n")
 	b.WriteString("   * @param {string} path\n")
-	b.WriteString("   * @param {{ method?: string, body?: RequestBody }} [options={}]\n")
+	b.WriteString("   * @param {{ method?: string, body?: RequestBody, signal?: AbortSignal }} [options={}]\n")
 	b.WriteString("   * @returns {Promise<Response>}\n")
 	b.WriteString("   */\n")
-	b.WriteString("  async #request(path, { method = 'GET', body } = {}) {\n")
+	b.WriteString("  async #request(path, { method = 'GET', body, signal } = {}) {\n")
 	b.WriteString("    const headers = this.headerProvider() || {};\n")
 	b.WriteString("    headers['Accept'] = 'application/x-protobuf';\n")
 	b.WriteString("    if (body !== undefined) {\n")
 	b.WriteString("      headers['Content-Type'] = 'application/x-protobuf';\n")
 	b.WriteString("    }\n")
-	b.WriteString("    return fetch(`${this.baseURL}${path}`, { method, headers, body, credentials: 'include' });\n")
+	b.WriteString("    return fetch(`${this.baseURL}${path}`, { method, headers, body, signal, credentials: 'include' });\n")
 	b.WriteString("  }\n\n")
 	for _, m := range methods {
 		if m.Streaming {
@@ -211,6 +211,7 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				b.WriteString(m.InputType)
 				b.WriteString("} payload\n")
 			}
+			b.WriteString("   * @param {{ signal?: AbortSignal }} [options={}]\n")
 			b.WriteString("   * @returns {AsyncIterable<")
 			b.WriteString(m.OutputType)
 			b.WriteString(">}\n")
@@ -218,9 +219,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("  ")
 			b.WriteString(m.Name)
 			if m.InputType == "Empty" {
-				b.WriteString("() {\n")
+				b.WriteString("(options = {}) {\n")
 			} else {
-				b.WriteString("(payload) {\n")
+				b.WriteString("(payload, options = {}) {\n")
 			}
 			b.WriteString("    const self = this;\n")
 			b.WriteString("    return {\n")
@@ -230,11 +231,11 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("', { method: '")
 			b.WriteString(m.HTTPMethod)
 			if m.InputType == "Empty" {
-				b.WriteString("' });\n")
+				b.WriteString("', signal: options.signal });\n")
 			} else {
 				b.WriteString("', body: encode")
 				b.WriteString(m.InputType)
-				b.WriteString("(payload) });\n")
+				b.WriteString("(payload), signal: options.signal });\n")
 			}
 			b.WriteString("        if (!response.ok) {\n")
 			b.WriteString("          return self.errorHandler(response);\n")
