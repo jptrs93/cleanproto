@@ -196,6 +196,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 	b.WriteString("import (\n")
 	b.WriteString("\t\"context\"\n")
 	if hasStream {
+		b.WriteString("\t\"fmt\"\n")
 		b.WriteString("\t\"iter\"\n")
 	}
 	b.WriteString("\t\"net/http\"\n")
@@ -366,29 +367,18 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				b.WriteString(handlerCtxName)
 				b.WriteString(", req)\n")
 			}
-			b.WriteString("\t\t\tflusher, _ := w.(http.Flusher)\n")
+			b.WriteString("\t\t\tstream := NewStreamWriter(w)\n")
 			b.WriteString("\t\t\tvar streamErr error\n")
-			b.WriteString("\t\t\tfirstHandled := false\n")
-			b.WriteString("\t\t\tseq(func(resp *")
-			b.WriteString(m.Output)
-			b.WriteString(", yieldErr error) bool {\n")
+			b.WriteString("\t\t\tfor resp, yieldErr := range seq {\n")
 			b.WriteString("\t\t\t\tif yieldErr != nil {\n")
-			b.WriteString("\t\t\t\t\tstreamErr = yieldErr\n")
-			b.WriteString("\t\t\t\t\treturn false\n")
+			b.WriteString("\t\t\t\t\tstreamErr = fmt.Errorf(\"streaming err: %w\", yieldErr)\n")
+			b.WriteString("\t\t\t\t\tbreak\n")
 			b.WriteString("\t\t\t\t}\n")
-			b.WriteString("\t\t\t\tif !firstHandled {\n")
-			b.WriteString("\t\t\t\t\tfirstHandled = true\n")
-			b.WriteString("\t\t\t\t\tSetStreamHeaders(w)\n")
+			b.WriteString("\t\t\t\tif werr := stream.Write(resp.Encode()); werr != nil {\n")
+			b.WriteString("\t\t\t\t\tstreamErr = fmt.Errorf(\"writing stream resp: %w\", werr)\n")
+			b.WriteString("\t\t\t\t\tbreak\n")
 			b.WriteString("\t\t\t\t}\n")
-			b.WriteString("\t\t\t\tif werr := WriteStreamFrame(w, resp.Encode()); werr != nil {\n")
-			b.WriteString("\t\t\t\t\tstreamErr = werr\n")
-			b.WriteString("\t\t\t\t\treturn false\n")
-			b.WriteString("\t\t\t\t}\n")
-			b.WriteString("\t\t\t\tif flusher != nil {\n")
-			b.WriteString("\t\t\t\t\tflusher.Flush()\n")
-			b.WriteString("\t\t\t\t}\n")
-			b.WriteString("\t\t\t\treturn true\n")
-			b.WriteString("\t\t\t})\n")
+			b.WriteString("\t\t\t}\n")
 			if m.Audit {
 				opID := m.OperationID
 				if opID == "" {
@@ -408,19 +398,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 					b.WriteString(", streamErr, req, nil)\n")
 				}
 			}
-			b.WriteString("\t\t\tif streamErr != nil {\n")
-			b.WriteString("\t\t\t\tif !firstHandled {\n")
-			b.WriteString("\t\t\t\t\tHandleReqErr(")
+			b.WriteString("\t\t\tstream.Finish(")
 			b.WriteString(handlerCtxName)
-			b.WriteString(", streamErr, r, w)\n")
-			b.WriteString("\t\t\t\t\treturn\n")
-			b.WriteString("\t\t\t\t}\n")
-			b.WriteString("\t\t\t\tpanic(http.ErrAbortHandler)\n")
-			b.WriteString("\t\t\t}\n")
-			b.WriteString("\t\t\tif !firstHandled {\n")
-			b.WriteString("\t\t\t\tSetStreamHeaders(w)\n")
-			b.WriteString("\t\t\t\tw.WriteHeader(http.StatusOK)\n")
-			b.WriteString("\t\t\t}\n")
+			b.WriteString(", streamErr)\n")
 			b.WriteString("\t\t}, middlewares...))\n")
 			continue
 		}
@@ -2464,8 +2444,20 @@ func RespondWithStatus(ctx context.Context, w http.ResponseWriter, b []byte, cod
 }
 
 func HandleReqErr(ctx context.Context, err error, r *http.Request, w http.ResponseWriter) {
+	path := ""
+	if r != nil {
+		path = r.URL.Path
+	}
+	handleReqErr(ctx, err, path, w)
+}
+
+func handleReqErr(ctx context.Context, err error, path string, w http.ResponseWriter) {
 	if err != nil && len(err.Error()) > 0 {
-		slog.ErrorContext(ctx, fmt.Sprintf("%v err: %v", r.URL.Path, err.Error()))
+		if path != "" {
+			slog.ErrorContext(ctx, fmt.Sprintf("%v err: %v", path, err.Error()))
+		} else {
+			slog.ErrorContext(ctx, fmt.Sprintf("err: %v", err.Error()))
+		}
 	}
 	var httpErr ApiErr
 	if !errors.As(err, &httpErr) {
@@ -2515,6 +2507,54 @@ func WriteStreamFrame(w io.Writer, payload []byte) error {
 		}
 	}
 	return nil
+}
+
+// StreamWriter lazily commits a protobuf-stream response on the first frame.
+type StreamWriter struct {
+	w       http.ResponseWriter
+	control *http.ResponseController
+	started bool
+}
+
+func NewStreamWriter(w http.ResponseWriter) *StreamWriter {
+	return &StreamWriter{w: w, control: http.NewResponseController(w)}
+}
+
+func (s *StreamWriter) Write(payload []byte) error {
+	if !s.started {
+		s.started = true
+		SetStreamHeaders(s.w)
+	}
+	if err := WriteStreamFrame(s.w, payload); err != nil {
+		return err
+	}
+	return s.control.Flush()
+}
+
+func (s *StreamWriter) Finish(ctx context.Context, err error) {
+	if err != nil {
+		if !s.started {
+			handleReqErr(ctx, err, "", s.w)
+			return
+		}
+		AbortStream(ctx, err, nil)
+	}
+	if s.started {
+		return
+	}
+	SetStreamHeaders(s.w)
+	s.w.WriteHeader(http.StatusOK)
+}
+
+func AbortStream(ctx context.Context, err error, r *http.Request) {
+	if err != nil {
+		if r != nil {
+			slog.ErrorContext(ctx, fmt.Sprintf("%v stream err: %v", r.URL.Path, err.Error()))
+		} else {
+			slog.ErrorContext(ctx, fmt.Sprintf("stream err: %v", err.Error()))
+		}
+	}
+	panic(http.ErrAbortHandler)
 }
 
 // SetStreamHeaders sets the response headers for a server-streaming RPC.
