@@ -115,6 +115,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		OutEmpty    bool
 		GoCustom    bool
 		Audit       bool
+		InputAudit  bool
+		OutputAudit bool
 		OperationID string
 		Streaming   bool
 		NoAuth      bool
@@ -124,6 +126,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 	methods := make([]muxMethod, 0)
 	hasAudit := false
 	hasStream := false
+	auditNeeds := computeAuditMessages(file, msgIndex)
 	for _, svc := range file.Services {
 		for _, m := range svc.Methods {
 			httpMethod, path, ok := deriveHTTPGo(m.Name)
@@ -166,6 +169,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				OutEmpty:    outEmpty,
 				GoCustom:    m.GoCustom,
 				Audit:       m.Audit,
+				InputAudit:  auditNeeds[m.InputFullName],
+				OutputAudit: auditNeeds[m.OutputFullName],
 				OperationID: m.OperationID,
 				Streaming:   m.IsStreamingServer,
 				NoAuth:      m.PolicyType == 1,
@@ -384,6 +389,10 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				if opID == "" {
 					opID = m.Name
 				}
+				reqPayloadExpr := "req"
+				if m.InputAudit {
+					reqPayloadExpr = "req.ToAudit()"
+				}
 				if m.InputEmpty {
 					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
@@ -395,7 +404,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", streamErr, req, nil)\n")
+					b.WriteString(", streamErr, ")
+					b.WriteString(reqPayloadExpr)
+					b.WriteString(", nil)\n")
 				}
 			}
 			b.WriteString("\t\t\tstream.Finish(")
@@ -434,6 +445,10 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				if opID == "" {
 					opID = m.Name
 				}
+				reqPayloadExpr := "req"
+				if m.InputAudit {
+					reqPayloadExpr = "req.ToAudit()"
+				}
 				if m.InputEmpty {
 					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
@@ -445,7 +460,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", err, req, nil)\n")
+					b.WriteString(", err, ")
+					b.WriteString(reqPayloadExpr)
+					b.WriteString(", nil)\n")
 				}
 			}
 			b.WriteString("\t\t\tif err != nil {\n")
@@ -474,18 +491,32 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				if opID == "" {
 					opID = m.Name
 				}
+				reqPayloadExpr := "req"
+				if m.InputAudit {
+					reqPayloadExpr = "req.ToAudit()"
+				}
+				respPayloadExpr := "res"
+				if m.OutputAudit {
+					respPayloadExpr = "res.ToAudit()"
+				}
 				if m.InputEmpty {
 					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", err, nil, res)\n")
+					b.WriteString(", err, nil, ")
+					b.WriteString(respPayloadExpr)
+					b.WriteString(")\n")
 				} else {
 					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
 					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", err, req, res)\n")
+					b.WriteString(", err, ")
+					b.WriteString(reqPayloadExpr)
+					b.WriteString(", ")
+					b.WriteString(respPayloadExpr)
+					b.WriteString(")\n")
 				}
 			}
 			b.WriteString("\t\t\tRespond(")
