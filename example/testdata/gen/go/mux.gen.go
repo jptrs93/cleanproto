@@ -20,7 +20,7 @@ type AuditFunc func(context.Context, string, error, any, any)
 type MuxConfig struct {
 	VerifyAuth          VerifyAuthFunc
 	Audit               AuditFunc
-	MaxRequestBodySize  *int
+	MaxRequestBodySize  int
 	Compression         *CompressionOptions
 	Middlewares         []MiddlewareFunc
 	PostAuthMiddlewares []PostAuthMiddlewareFunc
@@ -42,6 +42,23 @@ func ApplyPostAuthMiddlewares(h PostAuthHandlerFunc, middlewares ...PostAuthMidd
 	return h
 }
 
+func buildHandlerFunc(config *MuxConfig, verifyAuth VerifyAuthFunc, policy AccessPolicy, postAuthHandler PostAuthHandlerFunc, compressionMode int32, streaming bool) http.HandlerFunc {
+	postAuthHandler = ApplyPostAuthMiddlewares(postAuthHandler, config.PostAuthMiddlewares...)
+	routeHandler := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+		authCtx, err := verifyAuth(ctx, w, r, policy)
+		if err != nil {
+			HandleReqErr(ctx, err, r, w)
+			return
+		}
+		postAuthHandler(authCtx, w, r)
+	}, config.Middlewares...)
+	return func(w http.ResponseWriter, r *http.Request) {
+		w = WrapResponseCompression(w, r, config.Compression, compressionMode, streaming)
+		defer CloseResponseCompression(r.Context(), w)
+		routeHandler(w, r)
+	}
+}
+
 type ServerHandler interface {
 	GetLibraryV1(context.Context) (*Library, error)
 	GetLibraryBookV1(context.Context, *GetBookReq) (*Book, error)
@@ -59,24 +76,14 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 		}
 	}
 	m := http.NewServeMux()
-	postAuthHandlerGetLibraryV1 := ApplyPostAuthMiddlewares(func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+	getLibraryV1AccessPolicy := AccessPolicy{}
+	postAuthHandlerGetLibraryV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
 		res, err := h.GetLibraryV1(authCtx)
 		Respond(authCtx, r, w, res, err)
-	}, config.PostAuthMiddlewares...)
-	routeHandlerGetLibraryV1 := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		authCtx, err := verifyAuth(ctx, w, r, AccessPolicy{})
-		if err != nil {
-			HandleReqErr(ctx, err, r, w)
-			return
-		}
-		postAuthHandlerGetLibraryV1(authCtx, w, r)
-	}, config.Middlewares...)
-	m.HandleFunc("GET /v1/library", func(w http.ResponseWriter, r *http.Request) {
-		w = WrapResponseCompression(w, r, config.Compression, compressionModeAuto, false)
-		defer CloseResponseCompression(r.Context(), w)
-		routeHandlerGetLibraryV1(w, r)
-	})
-	postAuthHandlerGetLibraryBookV1 := ApplyPostAuthMiddlewares(func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+	}
+	m.HandleFunc("GET /v1/library", buildHandlerFunc(config, verifyAuth, getLibraryV1AccessPolicy, postAuthHandlerGetLibraryV1, compressionModeAuto, false))
+	getLibraryBookV1AccessPolicy := AccessPolicy{}
+	postAuthHandlerGetLibraryBookV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
 		req, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, DecodeGetBookReq)
 		if err != nil {
 			HandleReqErr(authCtx, err, r, w)
@@ -84,45 +91,22 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 		}
 		res, err := h.GetLibraryBookV1(authCtx, req)
 		Respond(authCtx, r, w, res, err)
-	}, config.PostAuthMiddlewares...)
-	routeHandlerGetLibraryBookV1 := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		authCtx, err := verifyAuth(ctx, w, r, AccessPolicy{})
-		if err != nil {
-			HandleReqErr(ctx, err, r, w)
-			return
-		}
-		postAuthHandlerGetLibraryBookV1(authCtx, w, r)
-	}, config.Middlewares...)
-	m.HandleFunc("GET /v1/library/book", func(w http.ResponseWriter, r *http.Request) {
-		w = WrapResponseCompression(w, r, config.Compression, compressionModeAuto, false)
-		defer CloseResponseCompression(r.Context(), w)
-		routeHandlerGetLibraryBookV1(w, r)
-	})
-	postAuthHandlerPostLibraryBookCheckoutV1 := ApplyPostAuthMiddlewares(func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+	}
+	m.HandleFunc("GET /v1/library/book", buildHandlerFunc(config, verifyAuth, getLibraryBookV1AccessPolicy, postAuthHandlerGetLibraryBookV1, compressionModeAuto, false))
+	postLibraryBookCheckoutV1AccessPolicy := AccessPolicy{}
+	postAuthHandlerPostLibraryBookCheckoutV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
 		req, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, DecodeCheckoutBookReq)
 		if err != nil {
 			HandleReqErr(authCtx, err, r, w)
 			return
 		}
-		err := h.PostLibraryBookCheckoutV1(authCtx, req)
+		err = h.PostLibraryBookCheckoutV1(authCtx, req)
 		if err != nil {
 			HandleReqErr(authCtx, err, r, w)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}, config.PostAuthMiddlewares...)
-	routeHandlerPostLibraryBookCheckoutV1 := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-		authCtx, err := verifyAuth(ctx, w, r, AccessPolicy{})
-		if err != nil {
-			HandleReqErr(ctx, err, r, w)
-			return
-		}
-		postAuthHandlerPostLibraryBookCheckoutV1(authCtx, w, r)
-	}, config.Middlewares...)
-	m.HandleFunc("POST /v1/library/book-checkout", func(w http.ResponseWriter, r *http.Request) {
-		w = WrapResponseCompression(w, r, config.Compression, compressionModeAuto, false)
-		defer CloseResponseCompression(r.Context(), w)
-		routeHandlerPostLibraryBookCheckoutV1(w, r)
-	})
+	}
+	m.HandleFunc("POST /v1/library/book-checkout", buildHandlerFunc(config, verifyAuth, postLibraryBookCheckoutV1AccessPolicy, postAuthHandlerPostLibraryBookCheckoutV1, compressionModeAuto, false))
 	return m
 }

@@ -119,13 +119,16 @@ func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 		"Compression         *CompressionOptions",
 		"verifyAuth := config.VerifyAuth",
 		"func ApplyPostAuthMiddlewares(h PostAuthHandlerFunc, middlewares ...PostAuthMiddlewareFunc) PostAuthHandlerFunc",
-		"authCtx, err := verifyAuth(ctx, w, r, AccessPolicy{})",
-		"}, config.PostAuthMiddlewares...)",
-		"w = WrapResponseCompression(w, r, config.Compression, compressionModeAuto, false)",
-		"w = WrapResponseCompression(w, r, config.Compression, compressionModeAlways, false)",
-		"w = WrapResponseCompression(w, r, config.Compression, compressionModeNever, false)",
-		"w = WrapResponseCompression(w, r, config.Compression, compressionModeAlways, true)",
-		"}, config.Middlewares...)",
+		"func buildHandlerFunc(config *MuxConfig, verifyAuth VerifyAuthFunc, policy AccessPolicy, postAuthHandler PostAuthHandlerFunc, compressionMode int32, streaming bool) http.HandlerFunc",
+		"authCtx, err := verifyAuth(ctx, w, r, policy)",
+		"w = WrapResponseCompression(w, r, config.Compression, compressionMode, streaming)",
+		"config.PostAuthMiddlewares...)",
+		"config.Middlewares...)",
+		"getAutoV1AccessPolicy := AccessPolicy{}",
+		"buildHandlerFunc(config, verifyAuth, getAutoV1AccessPolicy, postAuthHandlerGetAutoV1, compressionModeAuto, false)",
+		"buildHandlerFunc(config, verifyAuth, getAlwaysV1AccessPolicy, postAuthHandlerGetAlwaysV1, compressionModeAlways, false)",
+		"buildHandlerFunc(config, verifyAuth, getNeverV1AccessPolicy, postAuthHandlerGetNeverV1, compressionModeNever, false)",
+		"buildHandlerFunc(config, verifyAuth, getStreamAlwaysV1AccessPolicy, postAuthHandlerGetStreamAlwaysV1, compressionModeAlways, true)",
 	}
 	for _, check := range checks {
 		if !strings.Contains(mux, check) {

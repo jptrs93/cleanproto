@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -77,8 +76,8 @@ const (
 )
 
 type CompressionOptions struct {
-	MinSize *int
-	Level   *int
+	MinSize int
+	Level   int
 }
 
 type gzipResponseWriter struct {
@@ -91,6 +90,7 @@ type gzipResponseWriter struct {
 	streaming   bool
 	aborted     bool
 	passthrough bool
+	committed   bool
 }
 
 func WrapResponseCompression(w http.ResponseWriter, r *http.Request, options *CompressionOptions, mode int32, streaming bool) http.ResponseWriter {
@@ -120,17 +120,13 @@ func CloseResponseCompression(ctx context.Context, w http.ResponseWriter) {
 }
 
 func compressionEnabled(mode int32, options *CompressionOptions, streaming bool) bool {
+	if options == nil {
+		return false
+	}
 	if streaming {
 		return mode == compressionModeAlways
 	}
-	switch mode {
-	case compressionModeAlways:
-		return true
-	case compressionModeNever:
-		return false
-	default:
-		return compressionMinSize(mode, options, false) != math.MaxInt
-	}
+	return mode != compressionModeNever
 }
 
 func compressionMinSize(mode int32, options *CompressionOptions, streaming bool) int {
@@ -140,24 +136,14 @@ func compressionMinSize(mode int32, options *CompressionOptions, streaming bool)
 	if mode == compressionModeAlways {
 		return 0
 	}
-	if options == nil || options.MinSize == nil {
-		return math.MaxInt
-	}
-	if *options.MinSize < 0 {
-		return 0
-	}
-	return *options.MinSize
+	return max(options.MinSize, 1024)
 }
 
 func compressionLevel(options *CompressionOptions) int {
-	if options == nil || options.Level == nil {
+	if options.Level < gzip.HuffmanOnly || options.Level > gzip.BestCompression {
 		return gzip.DefaultCompression
 	}
-	level := *options.Level
-	if level < gzip.HuffmanOnly || level > gzip.BestCompression {
-		return gzip.DefaultCompression
-	}
-	return level
+	return options.Level
 }
 
 func requestAcceptsGzip(r *http.Request) bool {
@@ -228,8 +214,12 @@ func (w *gzipResponseWriter) WriteHeader(code int) {
 		w.ResponseWriter.WriteHeader(code)
 		return
 	}
+	if w.committed {
+		return
+	}
 	if w.writer != nil || w.passthrough {
 		w.ResponseWriter.WriteHeader(code)
+		w.committed = true
 		return
 	}
 	if w.code == 0 {
@@ -239,9 +229,11 @@ func (w *gzipResponseWriter) WriteHeader(code int) {
 
 func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 	if w.writer != nil {
+		w.committed = true
 		return w.writer.Write(b)
 	}
 	if w.passthrough {
+		w.committed = true
 		return w.ResponseWriter.Write(b)
 	}
 	w.buf = append(w.buf, b...)
@@ -295,18 +287,17 @@ func (w *gzipResponseWriter) Close() error {
 		return nil
 	}
 	if w.writer == nil && !w.passthrough {
-		if w.streaming {
-			if err := w.startCompressed(); err != nil {
-				return err
-			}
-		} else if w.shouldCompress() && len(w.buf) >= w.minSize {
-			if err := w.startCompressed(); err != nil {
-				return err
-			}
-		} else {
-			if err := w.startPlain(); err != nil {
-				return err
-			}
+		var err error
+		switch {
+		case w.streaming && len(w.buf) > 0:
+			err = w.startCompressed()
+		case !w.streaming && w.shouldCompress() && len(w.buf) >= w.minSize:
+			err = w.startCompressed()
+		default:
+			err = w.startPlain()
+		}
+		if err != nil {
+			return err
 		}
 	}
 	if w.writer == nil {
@@ -372,11 +363,13 @@ func (w *gzipResponseWriter) startCompressed() error {
 	if w.code != 0 {
 		w.ResponseWriter.WriteHeader(w.code)
 		w.code = 0
+		w.committed = true
 	}
 	w.writer = gz
 	if len(w.buf) == 0 {
 		return nil
 	}
+	w.committed = true
 	_, err = w.writer.Write(w.buf)
 	w.buf = w.buf[:0]
 	return err
@@ -387,10 +380,12 @@ func (w *gzipResponseWriter) startPlain() error {
 	if w.code != 0 {
 		w.ResponseWriter.WriteHeader(w.code)
 		w.code = 0
+		w.committed = true
 	}
 	if len(w.buf) == 0 {
 		return nil
 	}
+	w.committed = true
 	_, err := w.ResponseWriter.Write(w.buf)
 	w.buf = w.buf[:0]
 	return err
@@ -416,11 +411,11 @@ func decodeBody[T any](r *http.Request, decode func([]byte) (*T, error)) (*T, er
 	return decode(b)
 }
 
-func decodeWithMaxBodySize[T any](r *http.Request, maxRequestBodySize *int, decode func([]byte) (*T, error)) (*T, error) {
-	if maxRequestBodySize == nil {
+func decodeWithMaxBodySize[T any](r *http.Request, maxRequestBodySize int, decode func([]byte) (*T, error)) (*T, error) {
+	if maxRequestBodySize <= 0 {
 		return decodeBody(r, decode)
 	}
-	limit := int64(*maxRequestBodySize)
+	limit := int64(maxRequestBodySize)
 	b, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
 	if err != nil {
 		return nil, err
@@ -475,6 +470,7 @@ func (s *StreamWriter) Finish(ctx context.Context, err error) {
 		}
 		AbortResponseCompression(s.w)
 		AbortStream(ctx, err, nil)
+		return
 	}
 	if s.started {
 		return
