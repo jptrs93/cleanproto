@@ -21,7 +21,8 @@ type MuxConfig struct {
 	VerifyAuth          VerifyAuthFunc
 	Audit               AuditFunc
 	MaxRequestBodySize  int
-	Compression         *CompressionOptions
+	UnaryCompression    func(http.Handler) http.HandlerFunc
+	StreamCompression   func(http.Handler) http.HandlerFunc
 	Middlewares         []MiddlewareFunc
 	PostAuthMiddlewares []PostAuthMiddlewareFunc
 }
@@ -52,11 +53,17 @@ func buildHandlerFunc(config *MuxConfig, verifyAuth VerifyAuthFunc, policy Acces
 		}
 		postAuthHandler(authCtx, w, r)
 	}, config.Middlewares...)
-	return func(w http.ResponseWriter, r *http.Request) {
-		w = WrapResponseCompression(w, r, config.Compression, compressionMode, streaming)
-		defer CloseResponseCompression(r.Context(), w)
-		routeHandler(w, r)
+	if compressionMode == compressionModeNever {
+		return routeHandler
 	}
+	compress := config.UnaryCompression
+	if streaming {
+		compress = config.StreamCompression
+	}
+	if compress == nil {
+		return routeHandler
+	}
+	return compress(routeHandler)
 }
 
 type ServerHandler interface {

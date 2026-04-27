@@ -116,12 +116,16 @@ func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 		"Middlewares         []MiddlewareFunc",
 		"PostAuthMiddlewares []PostAuthMiddlewareFunc",
 		"func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux",
-		"Compression         *CompressionOptions",
+		"UnaryCompression    func(http.Handler) http.HandlerFunc",
+		"StreamCompression   func(http.Handler) http.HandlerFunc",
 		"verifyAuth := config.VerifyAuth",
 		"func ApplyPostAuthMiddlewares(h PostAuthHandlerFunc, middlewares ...PostAuthMiddlewareFunc) PostAuthHandlerFunc",
 		"func buildHandlerFunc(config *MuxConfig, verifyAuth VerifyAuthFunc, policy AccessPolicy, postAuthHandler PostAuthHandlerFunc, compressionMode int32, streaming bool) http.HandlerFunc",
 		"authCtx, err := verifyAuth(ctx, w, r, policy)",
-		"w = WrapResponseCompression(w, r, config.Compression, compressionMode, streaming)",
+		"if compressionMode == compressionModeNever",
+		"compress := config.UnaryCompression",
+		"compress = config.StreamCompression",
+		"return compress(routeHandler)",
 		"config.PostAuthMiddlewares...)",
 		"config.Middlewares...)",
 		"getAutoV1AccessPolicy := AccessPolicy{}",
@@ -134,19 +138,6 @@ func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 		if !strings.Contains(mux, check) {
 			t.Fatalf("expected generated mux to contain %q, got:\n%s", check, mux)
 		}
-	}
-
-	if !strings.Contains(muxUtilSource, "type CompressionOptions struct") {
-		t.Fatalf("expected mux util runtime to include compression options, got:\n%s", muxUtilSource)
-	}
-	if !strings.Contains(muxUtilSource, "func WrapResponseCompression(") {
-		t.Fatalf("expected mux util runtime to wrap responses for compression, got:\n%s", muxUtilSource)
-	}
-	if !strings.Contains(muxUtilSource, "return mode == compressionModeAlways") {
-		t.Fatalf("expected streaming compression to require explicit ALWAYS mode, got:\n%s", muxUtilSource)
-	}
-	if !strings.Contains(muxUtilSource, "AbortResponseCompression(s.w)") {
-		t.Fatalf("expected stream aborts to mark compression as aborted, got:\n%s", muxUtilSource)
 	}
 
 	utilSource := strings.ReplaceAll(muxUtilSource, "__PACKAGE__", "example")
