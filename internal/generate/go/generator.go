@@ -2499,7 +2499,6 @@ package __PACKAGE__
 
 import (
 	"bufio"
-	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -2510,6 +2509,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func Respond(ctx context.Context, r *http.Request, w http.ResponseWriter, res Encodable, resultErr error) {
@@ -2575,13 +2576,13 @@ type CompressionOptions struct {
 	Level   int
 }
 
-type gzipResponseWriter struct {
+type zstdResponseWriter struct {
 	http.ResponseWriter
-	writer      *gzip.Writer
+	writer      *zstd.Encoder
 	buf         []byte
 	code        int
 	minSize     int
-	level       int
+	level       zstd.EncoderLevel
 	streaming   bool
 	aborted     bool
 	passthrough bool
@@ -2593,10 +2594,10 @@ func WrapResponseCompression(w http.ResponseWriter, r *http.Request, options *Co
 		return w
 	}
 	w.Header().Add("Vary", "Accept-Encoding")
-	if !requestAcceptsGzip(r) {
+	if !requestAcceptsZstd(r) {
 		return w
 	}
-	return &gzipResponseWriter{
+	return &zstdResponseWriter{
 		ResponseWriter: w,
 		minSize:        compressionMinSize(mode, options, streaming),
 		level:          compressionLevel(options),
@@ -2634,21 +2635,21 @@ func compressionMinSize(mode int32, options *CompressionOptions, streaming bool)
 	return max(options.MinSize, 1024)
 }
 
-func compressionLevel(options *CompressionOptions) int {
-	if options.Level < gzip.HuffmanOnly || options.Level > gzip.BestCompression {
-		return gzip.DefaultCompression
+func compressionLevel(options *CompressionOptions) zstd.EncoderLevel {
+	if options.Level <= 0 {
+		return zstd.SpeedDefault
 	}
-	return options.Level
+	return zstd.EncoderLevelFromZstd(options.Level)
 }
 
-func requestAcceptsGzip(r *http.Request) bool {
+func requestAcceptsZstd(r *http.Request) bool {
 	if r == nil || r.Method == http.MethodHead {
 		return false
 	}
-	return parseEncodingGzip(r.Header.Get("Accept-Encoding")) > 0
+	return parseEncodingZstd(r.Header.Get("Accept-Encoding")) > 0
 }
 
-func parseEncodingGzip(s string) float64 {
+func parseEncodingZstd(s string) float64 {
 	s = strings.TrimSpace(s)
 	for len(s) > 0 {
 		stop := strings.IndexByte(s, ',')
@@ -2656,7 +2657,7 @@ func parseEncodingGzip(s string) float64 {
 			stop = len(s)
 		}
 		coding, qvalue, _ := parseCoding(s[:stop])
-		if coding == "gzip" {
+		if coding == "zstd" {
 			return qvalue
 		}
 		if stop == len(s) {
@@ -2704,7 +2705,7 @@ func parseCoding(s string) (coding string, qvalue float64, err error) {
 	return coding, qvalue, err
 }
 
-func (w *gzipResponseWriter) WriteHeader(code int) {
+func (w *zstdResponseWriter) WriteHeader(code int) {
 	if code >= 100 && code <= 199 {
 		w.ResponseWriter.WriteHeader(code)
 		return
@@ -2722,7 +2723,7 @@ func (w *gzipResponseWriter) WriteHeader(code int) {
 	}
 }
 
-func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+func (w *zstdResponseWriter) Write(b []byte) (int, error) {
 	if w.writer != nil {
 		w.committed = true
 		return w.writer.Write(b)
@@ -2747,7 +2748,7 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (w *gzipResponseWriter) Flush() {
+func (w *zstdResponseWriter) Flush() {
 	if w.writer == nil && !w.passthrough {
 		if w.streaming && len(w.buf) == 0 {
 			return
@@ -2767,7 +2768,7 @@ func (w *gzipResponseWriter) Flush() {
 	}
 	if w.writer != nil {
 		if err := w.writer.Flush(); err != nil {
-			slog.Error(fmt.Sprintf("flushing gzip writer: %v", err))
+			slog.Error(fmt.Sprintf("flushing zstd writer: %v", err))
 			return
 		}
 	}
@@ -2776,7 +2777,7 @@ func (w *gzipResponseWriter) Flush() {
 	}
 }
 
-func (w *gzipResponseWriter) Close() error {
+func (w *zstdResponseWriter) Close() error {
 	if w.aborted {
 		w.writer = nil
 		return nil
@@ -2803,12 +2804,12 @@ func (w *gzipResponseWriter) Close() error {
 	return err
 }
 
-func (w *gzipResponseWriter) AbortCompression() {
+func (w *zstdResponseWriter) AbortCompression() {
 	w.aborted = true
 	w.writer = nil
 }
 
-func (w *gzipResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+func (w *zstdResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hijacker, ok := w.ResponseWriter.(http.Hijacker)
 	if !ok {
 		return nil, nil, fmt.Errorf("http.Hijacker interface is not supported")
@@ -2816,7 +2817,7 @@ func (w *gzipResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hijacker.Hijack()
 }
 
-func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
+func (w *zstdResponseWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
@@ -2828,7 +2829,7 @@ func AbortResponseCompression(w http.ResponseWriter) {
 	aborter.AbortCompression()
 }
 
-func (w *gzipResponseWriter) shouldCompress() bool {
+func (w *zstdResponseWriter) shouldCompress() bool {
 	if w.Header().Get("Content-Encoding") != "" {
 		return false
 	}
@@ -2845,22 +2846,22 @@ func (w *gzipResponseWriter) shouldCompress() bool {
 	return bodyAllowedForStatus(status)
 }
 
-func (w *gzipResponseWriter) startCompressed() error {
+func (w *zstdResponseWriter) startCompressed() error {
 	if !w.shouldCompress() {
 		return w.startPlain()
 	}
-	gz, err := gzip.NewWriterLevel(w.ResponseWriter, w.level)
+	enc, err := zstd.NewWriter(w.ResponseWriter, zstd.WithEncoderLevel(w.level))
 	if err != nil {
 		return err
 	}
-	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Set("Content-Encoding", "zstd")
 	w.Header().Del("Content-Length")
 	if w.code != 0 {
 		w.ResponseWriter.WriteHeader(w.code)
 		w.code = 0
 		w.committed = true
 	}
-	w.writer = gz
+	w.writer = enc
 	if len(w.buf) == 0 {
 		return nil
 	}
@@ -2870,7 +2871,7 @@ func (w *gzipResponseWriter) startCompressed() error {
 	return err
 }
 
-func (w *gzipResponseWriter) startPlain() error {
+func (w *zstdResponseWriter) startPlain() error {
 	w.passthrough = true
 	if w.code != 0 {
 		w.ResponseWriter.WriteHeader(w.code)
