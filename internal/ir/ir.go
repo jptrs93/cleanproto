@@ -24,6 +24,7 @@ type Method struct {
 	IsStreamingServer bool
 	PolicyType        int32
 	PolicyScopes      []string
+	CompressionMode   int32
 }
 
 type Enum struct {

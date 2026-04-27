@@ -206,6 +206,10 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 			if err != nil {
 				return nil, err
 			}
+			compressionMode, err := compressionFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
 			policyType, policyScopes, err := policyFromMethodOptions(m)
 			if err != nil {
 				return nil, err
@@ -220,6 +224,7 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 				IsStreamingServer: m.IsStreamingServer(),
 				PolicyType:        policyType,
 				PolicyScopes:      policyScopes,
+				CompressionMode:   compressionMode,
 			})
 		}
 		outSvc.Methods = methods

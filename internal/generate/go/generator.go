@@ -122,6 +122,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		NoAuth      bool
 		Scopes      []string
 		PolicyType  int32
+		Compression int32
 	}
 	methods := make([]muxMethod, 0)
 	hasAudit := false
@@ -176,6 +177,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				NoAuth:      m.PolicyType == 1,
 				Scopes:      append([]string(nil), m.PolicyScopes...),
 				PolicyType:  m.PolicyType,
+				Compression: m.CompressionMode,
 			})
 			if m.Audit {
 				hasAudit = true
@@ -208,11 +210,23 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 	b.WriteString(")\n\n")
 	b.WriteString("type HandlerFunc = func(context.Context, http.ResponseWriter, *http.Request)\n")
 	b.WriteString("type MiddlewareFunc func(next HandlerFunc) HandlerFunc\n\n")
-	b.WriteString("type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (")
+	b.WriteString("type VerifyAuthFunc func(context.Context, http.ResponseWriter, *http.Request, AccessPolicy) (")
 	b.WriteString(ctxType)
 	b.WriteString(", error)\n\n")
-	b.WriteString("type MuxOptions struct {\n")
-	b.WriteString("\tMaxRequestBodySize *int\n")
+	b.WriteString("type PostAuthHandlerFunc func(")
+	b.WriteString(ctxType)
+	b.WriteString(", http.ResponseWriter, *http.Request)\n")
+	b.WriteString("type PostAuthMiddlewareFunc func(next PostAuthHandlerFunc) PostAuthHandlerFunc\n\n")
+	b.WriteString("type AuditFunc func(")
+	b.WriteString(ctxType)
+	b.WriteString(", string, error, any, any)\n\n")
+	b.WriteString("type MuxConfig struct {\n")
+	b.WriteString("\tVerifyAuth          VerifyAuthFunc\n")
+	b.WriteString("\tAudit               AuditFunc\n")
+	b.WriteString("\tMaxRequestBodySize  *int\n")
+	b.WriteString("\tCompression         *CompressionOptions\n")
+	b.WriteString("\tMiddlewares         []MiddlewareFunc\n")
+	b.WriteString("\tPostAuthMiddlewares []PostAuthMiddlewareFunc\n")
 	b.WriteString("}\n\n")
 	b.WriteString("func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.HandlerFunc {\n")
 	b.WriteString("\tfor _, m := range middlewares {\n")
@@ -221,6 +235,12 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 	b.WriteString("\treturn func(w http.ResponseWriter, r *http.Request) {\n")
 	b.WriteString("\t\th(r.Context(), w, r)\n")
 	b.WriteString("\t}\n")
+	b.WriteString("}\n\n")
+	b.WriteString("func ApplyPostAuthMiddlewares(h PostAuthHandlerFunc, middlewares ...PostAuthMiddlewareFunc) PostAuthHandlerFunc {\n")
+	b.WriteString("\tfor _, m := range middlewares {\n")
+	b.WriteString("\t\th = m(h)\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\treturn h\n")
 	b.WriteString("}\n\n")
 	b.WriteString("type ServerHandler interface {\n")
 	for _, m := range methods {
@@ -257,15 +277,13 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		}
 	}
 	b.WriteString("}\n\n")
-	b.WriteString("func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc")
-	if hasAudit {
-		b.WriteString(", audit func(ctx ")
-		b.WriteString(ctxType)
-		b.WriteString(", operationID string, err error, reqPayload, respPayload any)")
-	}
-	b.WriteString(", options *MuxOptions, middlewares ...MiddlewareFunc) *http.ServeMux {\n")
+	b.WriteString("func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {\n")
+	b.WriteString("\tif config == nil {\n")
+	b.WriteString("\t\tconfig = &MuxConfig{}\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tverifyAuth := config.VerifyAuth\n")
 	b.WriteString("\tif verifyAuth == nil {\n")
-	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (")
+	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ http.ResponseWriter, _ *http.Request, _ AccessPolicy) (")
 	b.WriteString(ctxType)
 	b.WriteString(", error) {\n")
 	if ctxType == "context.Context" {
@@ -274,57 +292,51 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		b.WriteString("\t\t\tvar authCtx ")
 		b.WriteString(ctxType)
 		b.WriteString("\n")
-		b.WriteString("\t\t\tif v, ok := ctx.(")
-		b.WriteString(ctxType)
-		b.WriteString("); ok {\n")
-		b.WriteString("\t\t\t\tauthCtx = v\n")
-		b.WriteString("\t\t\t}\n")
 		b.WriteString("\t\t\treturn authCtx, nil\n")
 	}
 	b.WriteString("\t\t}\n")
 	b.WriteString("\t}\n")
 	if hasAudit {
+		b.WriteString("\taudit := config.Audit\n")
 		b.WriteString("\tif audit == nil {\n")
 		b.WriteString("\t\taudit = func(")
 		b.WriteString(ctxType)
 		b.WriteString(", string, error, any, any) {}\n")
 		b.WriteString("\t}\n")
 	}
-	b.WriteString("\tif options == nil {\n")
-	b.WriteString("\t\toptions = &MuxOptions{}\n")
-	b.WriteString("\t}\n")
 	b.WriteString("\tm := http.NewServeMux()\n")
-	for _, m := range methods {
+	writeRouteRegistration := func(handlerName string, method muxMethod) {
+		b.WriteString("\t}, config.Middlewares...)\n")
 		b.WriteString("\tm.HandleFunc(\"")
-		b.WriteString(m.HTTPMethod)
+		b.WriteString(method.HTTPMethod)
 		b.WriteString(" ")
-		b.WriteString(m.Path)
-		b.WriteString("\", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {\n")
-		if ctxType == "context.Context" {
-			b.WriteString("\t\t\tctx, err := verifyAuth(ctx, r, ")
+		b.WriteString(method.Path)
+		b.WriteString("\", func(w http.ResponseWriter, r *http.Request) {\n")
+		b.WriteString("\t\tw = WrapResponseCompression(w, r, config.Compression, ")
+		b.WriteString(compressionModeLiteral(method.Compression))
+		if method.Streaming {
+			b.WriteString(", true)\n")
 		} else {
-			b.WriteString("\t\t\tauthCtx, err := verifyAuth(ctx, r, ")
+			b.WriteString(", false)\n")
 		}
-		b.WriteString(policyLiteral(m.PolicyType, m.Scopes))
-		b.WriteString(")\n")
-		b.WriteString("\t\t\tif err != nil {\n")
-		b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
-		b.WriteString("\t\t\t\treturn\n")
-		b.WriteString("\t\t\t}\n")
-		handlerCtxName := "ctx"
-		if ctxType != "context.Context" {
-			handlerCtxName = "authCtx"
-		}
-		if m.GoCustom {
-			if m.InputEmpty {
-				b.WriteString("\t\t\terr = h.")
-				b.WriteString(m.Handler)
+		b.WriteString("\t\tdefer CloseResponseCompression(r.Context(), w)\n")
+		b.WriteString("\t\t")
+		b.WriteString(handlerName)
+		b.WriteString("(w, r)\n")
+		b.WriteString("\t})\n")
+	}
+	writeRouteHandlerBody := func(method muxMethod) {
+		handlerCtxName := "authCtx"
+		if method.GoCustom {
+			if method.InputEmpty {
+				b.WriteString("\t\t\terr := h.")
+				b.WriteString(method.Handler)
 				b.WriteString("(")
 				b.WriteString(handlerCtxName)
 				b.WriteString(", r, w)\n")
 			} else {
-				b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, Decode")
-				b.WriteString(m.Input)
+				b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, Decode")
+				b.WriteString(method.Input)
 				b.WriteString(")\n")
 				b.WriteString("\t\t\tif err != nil {\n")
 				b.WriteString("\t\t\t\tHandleReqErr(")
@@ -333,7 +345,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				b.WriteString("\t\t\t\treturn\n")
 				b.WriteString("\t\t\t}\n")
 				b.WriteString("\t\t\terr = h.")
-				b.WriteString(m.Handler)
+				b.WriteString(method.Handler)
 				b.WriteString("(")
 				b.WriteString(handlerCtxName)
 				b.WriteString(", req, r, w)\n")
@@ -344,13 +356,12 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString(", err, r, w)\n")
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
-			b.WriteString("\t\t}, middlewares...))\n")
-			continue
+			return
 		}
-		if m.Streaming {
-			if !m.InputEmpty {
-				b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, Decode")
-				b.WriteString(m.Input)
+		if method.Streaming {
+			if !method.InputEmpty {
+				b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, Decode")
+				b.WriteString(method.Input)
 				b.WriteString(")\n")
 				b.WriteString("\t\t\tif err != nil {\n")
 				b.WriteString("\t\t\t\tHandleReqErr(")
@@ -359,15 +370,15 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				b.WriteString("\t\t\t\treturn\n")
 				b.WriteString("\t\t\t}\n")
 			}
-			if m.InputEmpty {
+			if method.InputEmpty {
 				b.WriteString("\t\t\tseq := h.")
-				b.WriteString(m.Handler)
+				b.WriteString(method.Handler)
 				b.WriteString("(")
 				b.WriteString(handlerCtxName)
 				b.WriteString(")\n")
 			} else {
 				b.WriteString("\t\t\tseq := h.")
-				b.WriteString(m.Handler)
+				b.WriteString(method.Handler)
 				b.WriteString("(")
 				b.WriteString(handlerCtxName)
 				b.WriteString(", req)\n")
@@ -384,16 +395,16 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString("\t\t\t\t\tbreak\n")
 			b.WriteString("\t\t\t\t}\n")
 			b.WriteString("\t\t\t}\n")
-			if m.Audit {
-				opID := m.OperationID
+			if method.Audit {
+				opID := method.OperationID
 				if opID == "" {
-					opID = m.Name
+					opID = method.Name
 				}
 				reqPayloadExpr := "req"
-				if m.InputAudit {
+				if method.InputAudit {
 					reqPayloadExpr = "req.ToAudit()"
 				}
-				if m.InputEmpty {
+				if method.InputEmpty {
 					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
@@ -412,12 +423,11 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString("\t\t\tstream.Finish(")
 			b.WriteString(handlerCtxName)
 			b.WriteString(", streamErr)\n")
-			b.WriteString("\t\t}, middlewares...))\n")
-			continue
+			return
 		}
-		if !m.InputEmpty {
-			b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, Decode")
-			b.WriteString(m.Input)
+		if !method.InputEmpty {
+			b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, Decode")
+			b.WriteString(method.Input)
 			b.WriteString(")\n")
 			b.WriteString("\t\t\tif err != nil {\n")
 			b.WriteString("\t\t\t\tHandleReqErr(")
@@ -426,30 +436,30 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
 		}
-		if m.OutEmpty {
-			if m.InputEmpty {
-				b.WriteString("\t\t\terr = h.")
-				b.WriteString(m.Handler)
+		if method.OutEmpty {
+			if method.InputEmpty {
+				b.WriteString("\t\t\terr := h.")
+				b.WriteString(method.Handler)
 				b.WriteString("(")
 				b.WriteString(handlerCtxName)
 				b.WriteString(")\n")
 			} else {
-				b.WriteString("\t\t\terr = h.")
-				b.WriteString(m.Handler)
+				b.WriteString("\t\t\terr := h.")
+				b.WriteString(method.Handler)
 				b.WriteString("(")
 				b.WriteString(handlerCtxName)
 				b.WriteString(", req)\n")
 			}
-			if m.Audit {
-				opID := m.OperationID
+			if method.Audit {
+				opID := method.OperationID
 				if opID == "" {
-					opID = m.Name
+					opID = method.Name
 				}
 				reqPayloadExpr := "req"
-				if m.InputAudit {
+				if method.InputAudit {
 					reqPayloadExpr = "req.ToAudit()"
 				}
-				if m.InputEmpty {
+				if method.InputEmpty {
 					b.WriteString("\t\t\taudit(")
 					b.WriteString(handlerCtxName)
 					b.WriteString(", ")
@@ -472,58 +482,82 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
 			b.WriteString("\t\t\tw.WriteHeader(http.StatusNoContent)\n")
+			return
+		}
+		if method.InputEmpty {
+			b.WriteString("\t\t\tres, err := h.")
+			b.WriteString(method.Handler)
+			b.WriteString("(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(")\n")
 		} else {
-			if m.InputEmpty {
-				b.WriteString("\t\t\tres, err := h.")
-				b.WriteString(m.Handler)
-				b.WriteString("(")
+			b.WriteString("\t\t\tres, err := h.")
+			b.WriteString(method.Handler)
+			b.WriteString("(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", req)\n")
+		}
+		if method.Audit {
+			opID := method.OperationID
+			if opID == "" {
+				opID = method.Name
+			}
+			reqPayloadExpr := "req"
+			if method.InputAudit {
+				reqPayloadExpr = "req.ToAudit()"
+			}
+			respPayloadExpr := "res"
+			if method.OutputAudit {
+				respPayloadExpr = "res.ToAudit()"
+			}
+			if method.InputEmpty {
+				b.WriteString("\t\t\taudit(")
 				b.WriteString(handlerCtxName)
+				b.WriteString(", ")
+				b.WriteString(fmt.Sprintf("%q", opID))
+				b.WriteString(", err, nil, ")
+				b.WriteString(respPayloadExpr)
 				b.WriteString(")\n")
 			} else {
-				b.WriteString("\t\t\tres, err := h.")
-				b.WriteString(m.Handler)
-				b.WriteString("(")
+				b.WriteString("\t\t\taudit(")
 				b.WriteString(handlerCtxName)
-				b.WriteString(", req)\n")
+				b.WriteString(", ")
+				b.WriteString(fmt.Sprintf("%q", opID))
+				b.WriteString(", err, ")
+				b.WriteString(reqPayloadExpr)
+				b.WriteString(", ")
+				b.WriteString(respPayloadExpr)
+				b.WriteString(")\n")
 			}
-			if m.Audit {
-				opID := m.OperationID
-				if opID == "" {
-					opID = m.Name
-				}
-				reqPayloadExpr := "req"
-				if m.InputAudit {
-					reqPayloadExpr = "req.ToAudit()"
-				}
-				respPayloadExpr := "res"
-				if m.OutputAudit {
-					respPayloadExpr = "res.ToAudit()"
-				}
-				if m.InputEmpty {
-					b.WriteString("\t\t\taudit(")
-					b.WriteString(handlerCtxName)
-					b.WriteString(", ")
-					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", err, nil, ")
-					b.WriteString(respPayloadExpr)
-					b.WriteString(")\n")
-				} else {
-					b.WriteString("\t\t\taudit(")
-					b.WriteString(handlerCtxName)
-					b.WriteString(", ")
-					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", err, ")
-					b.WriteString(reqPayloadExpr)
-					b.WriteString(", ")
-					b.WriteString(respPayloadExpr)
-					b.WriteString(")\n")
-				}
-			}
-			b.WriteString("\t\t\tRespond(")
-			b.WriteString(handlerCtxName)
-			b.WriteString(", r, w, res, err)\n")
 		}
-		b.WriteString("\t\t}, middlewares...))\n")
+		b.WriteString("\t\t\tRespond(")
+		b.WriteString(handlerCtxName)
+		b.WriteString(", r, w, res, err)\n")
+	}
+	for _, m := range methods {
+		postAuthHandlerName := "postAuthHandler" + m.Handler
+		routeHandlerName := "routeHandler" + m.Handler
+		b.WriteString("\t")
+		b.WriteString(postAuthHandlerName)
+		b.WriteString(" := ApplyPostAuthMiddlewares(func(authCtx ")
+		b.WriteString(ctxType)
+		b.WriteString(", w http.ResponseWriter, r *http.Request) {\n")
+		writeRouteHandlerBody(m)
+		b.WriteString("\t}, config.PostAuthMiddlewares...)\n")
+		b.WriteString("\t")
+		b.WriteString(routeHandlerName)
+		b.WriteString(" := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {\n")
+		b.WriteString("\t\t\tauthCtx, err := verifyAuth(ctx, w, r, ")
+		b.WriteString(policyLiteral(m.PolicyType, m.Scopes))
+		b.WriteString(")\n")
+		b.WriteString("\t\t\tif err != nil {\n")
+		b.WriteString("\t\t\t\tHandleReqErr(ctx, err, r, w)\n")
+		b.WriteString("\t\t\t\treturn\n")
+		b.WriteString("\t\t\t}\n")
+		b.WriteString("\t\t\t")
+		b.WriteString(postAuthHandlerName)
+		b.WriteString("(authCtx, w, r)\n")
+		writeRouteRegistration(routeHandlerName, m)
 	}
 	b.WriteString("\treturn m\n")
 	b.WriteString("}\n")
@@ -552,6 +586,17 @@ func policyLiteral(policyType int32, scopes []string) string {
 	}
 	b.WriteString("}}")
 	return b.String()
+}
+
+func compressionModeLiteral(mode int32) string {
+	switch mode {
+	case 1:
+		return "compressionModeAlways"
+	case 2:
+		return "compressionModeNever"
+	default:
+		return "compressionModeAuto"
+	}
 }
 
 func deriveHTTPGo(name string) (method string, path string, ok bool) {
@@ -2442,13 +2487,19 @@ const muxUtilSource = `// Code generated by cleanproto. DO NOT EDIT.
 package __PACKAGE__
 
 import (
+	"bufio"
+	"compress/gzip"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"net"
 	"net/http"
+	"strconv"
+	"strings"
 )
 
 func Respond(ctx context.Context, r *http.Request, w http.ResponseWriter, res Encodable, resultErr error) {
@@ -2501,6 +2552,345 @@ func handleReqErr(ctx context.Context, err error, path string, w http.ResponseWr
 	}
 	w.Header().Set("Content-Type", "application/protobuf")
 	RespondWithStatus(ctx, w, httpErr.Encode(), int(httpErr.Code))
+}
+
+const (
+	compressionModeAuto int32 = iota
+	compressionModeAlways
+	compressionModeNever
+)
+
+type CompressionOptions struct {
+	MinSize *int
+	Level   *int
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	writer      *gzip.Writer
+	buf         []byte
+	code        int
+	minSize     int
+	level       int
+	streaming   bool
+	aborted     bool
+	passthrough bool
+}
+
+func WrapResponseCompression(w http.ResponseWriter, r *http.Request, options *CompressionOptions, mode int32, streaming bool) http.ResponseWriter {
+	if !compressionEnabled(mode, options, streaming) {
+		return w
+	}
+	w.Header().Add("Vary", "Accept-Encoding")
+	if !requestAcceptsGzip(r) {
+		return w
+	}
+	return &gzipResponseWriter{
+		ResponseWriter: w,
+		minSize:        compressionMinSize(mode, options, streaming),
+		level:          compressionLevel(options),
+		streaming:      streaming,
+	}
+}
+
+func CloseResponseCompression(ctx context.Context, w http.ResponseWriter) {
+	closer, ok := w.(interface{ Close() error })
+	if !ok {
+		return
+	}
+	if err := closer.Close(); err != nil {
+		slog.ErrorContext(ctx, fmt.Sprintf("closing compressed response: %v", err))
+	}
+}
+
+func compressionEnabled(mode int32, options *CompressionOptions, streaming bool) bool {
+	if streaming {
+		return mode == compressionModeAlways
+	}
+	switch mode {
+	case compressionModeAlways:
+		return true
+	case compressionModeNever:
+		return false
+	default:
+		return compressionMinSize(mode, options, false) != math.MaxInt
+	}
+}
+
+
+func compressionMinSize(mode int32, options *CompressionOptions, streaming bool) int {
+	if streaming {
+		return 0
+	}
+	if mode == compressionModeAlways {
+		return 0
+	}
+	if options == nil || options.MinSize == nil {
+		return math.MaxInt
+	}
+	if *options.MinSize < 0 {
+		return 0
+	}
+	return *options.MinSize
+}
+
+func compressionLevel(options *CompressionOptions) int {
+	if options == nil || options.Level == nil {
+		return gzip.DefaultCompression
+	}
+	level := *options.Level
+	if level < gzip.HuffmanOnly || level > gzip.BestCompression {
+		return gzip.DefaultCompression
+	}
+	return level
+}
+
+func requestAcceptsGzip(r *http.Request) bool {
+	if r == nil || r.Method == http.MethodHead {
+		return false
+	}
+	return parseEncodingGzip(r.Header.Get("Accept-Encoding")) > 0
+}
+
+func parseEncodingGzip(s string) float64 {
+	s = strings.TrimSpace(s)
+	for len(s) > 0 {
+		stop := strings.IndexByte(s, ',')
+		if stop < 0 {
+			stop = len(s)
+		}
+		coding, qvalue, _ := parseCoding(s[:stop])
+		if coding == "gzip" {
+			return qvalue
+		}
+		if stop == len(s) {
+			break
+		}
+		s = s[stop+1:]
+	}
+	return 0
+}
+
+var errEmptyContentCoding = errors.New("empty content-coding")
+
+func parseCoding(s string) (coding string, qvalue float64, err error) {
+	if len(s) == 0 {
+		return "", 0, errEmptyContentCoding
+	}
+	if !strings.ContainsRune(s, ';') {
+		coding = strings.ToLower(strings.TrimSpace(s))
+		if coding == "" {
+			err = errEmptyContentCoding
+		}
+		return coding, 1, err
+	}
+	qvalue = 1
+	for n, part := range strings.Split(s, ";") {
+		part = strings.TrimSpace(part)
+		if n == 0 {
+			coding = strings.ToLower(part)
+			continue
+		}
+		after, ok := strings.CutPrefix(part, "q=")
+		if !ok {
+			continue
+		}
+		qvalue, err = strconv.ParseFloat(after, 64)
+		if qvalue < 0 {
+			qvalue = 0
+		} else if qvalue > 1 {
+			qvalue = 1
+		}
+	}
+	if coding == "" {
+		err = errEmptyContentCoding
+	}
+	return coding, qvalue, err
+}
+
+func (w *gzipResponseWriter) WriteHeader(code int) {
+	if code >= 100 && code <= 199 {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
+	if w.writer != nil || w.passthrough {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
+	if w.code == 0 {
+		w.code = code
+	}
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	if w.writer != nil {
+		return w.writer.Write(b)
+	}
+	if w.passthrough {
+		return w.ResponseWriter.Write(b)
+	}
+	w.buf = append(w.buf, b...)
+	if !w.shouldCompress() {
+		if err := w.startPlain(); err != nil {
+			return 0, err
+		}
+		return len(b), nil
+	}
+	if len(w.buf) < w.minSize {
+		return len(b), nil
+	}
+	if err := w.startCompressed(); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+func (w *gzipResponseWriter) Flush() {
+	if w.writer == nil && !w.passthrough {
+		if w.streaming && len(w.buf) == 0 {
+			return
+		}
+		var err error
+		if len(w.buf) == 0 {
+			err = w.startPlain()
+		} else if w.shouldCompress() {
+			err = w.startCompressed()
+		} else {
+			err = w.startPlain()
+		}
+		if err != nil {
+			slog.Error(fmt.Sprintf("flushing compressed response: %v", err))
+			return
+		}
+	}
+	if w.writer != nil {
+		if err := w.writer.Flush(); err != nil {
+			slog.Error(fmt.Sprintf("flushing gzip writer: %v", err))
+			return
+		}
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *gzipResponseWriter) Close() error {
+	if w.aborted {
+		w.writer = nil
+		return nil
+	}
+	if w.writer == nil && !w.passthrough {
+		if w.streaming {
+			if err := w.startCompressed(); err != nil {
+				return err
+			}
+		} else if w.shouldCompress() && len(w.buf) >= w.minSize {
+			if err := w.startCompressed(); err != nil {
+				return err
+			}
+		} else {
+			if err := w.startPlain(); err != nil {
+				return err
+			}
+		}
+	}
+	if w.writer == nil {
+		return nil
+	}
+	err := w.writer.Close()
+	w.writer = nil
+	return err
+}
+
+func (w *gzipResponseWriter) AbortCompression() {
+	w.aborted = true
+	w.writer = nil
+}
+
+func (w *gzipResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("http.Hijacker interface is not supported")
+	}
+	return hijacker.Hijack()
+}
+
+func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func AbortResponseCompression(w http.ResponseWriter) {
+	aborter, ok := w.(interface{ AbortCompression() })
+	if !ok {
+		return
+	}
+	aborter.AbortCompression()
+}
+
+func (w *gzipResponseWriter) shouldCompress() bool {
+	if w.Header().Get("Content-Encoding") != "" {
+		return false
+	}
+	if w.Header().Get("Content-Range") != "" {
+		return false
+	}
+	status := w.code
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if status == http.StatusPartialContent {
+		return false
+	}
+	return bodyAllowedForStatus(status)
+}
+
+func (w *gzipResponseWriter) startCompressed() error {
+	if !w.shouldCompress() {
+		return w.startPlain()
+	}
+	gz, err := gzip.NewWriterLevel(w.ResponseWriter, w.level)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Del("Content-Length")
+	if w.code != 0 {
+		w.ResponseWriter.WriteHeader(w.code)
+		w.code = 0
+	}
+	w.writer = gz
+	if len(w.buf) == 0 {
+		return nil
+	}
+	_, err = w.writer.Write(w.buf)
+	w.buf = w.buf[:0]
+	return err
+}
+
+func (w *gzipResponseWriter) startPlain() error {
+	w.passthrough = true
+	if w.code != 0 {
+		w.ResponseWriter.WriteHeader(w.code)
+		w.code = 0
+	}
+	if len(w.buf) == 0 {
+		return nil
+	}
+	_, err := w.ResponseWriter.Write(w.buf)
+	w.buf = w.buf[:0]
+	return err
+}
+
+func bodyAllowedForStatus(status int) bool {
+	switch {
+	case status >= 100 && status <= 199:
+		return false
+	case status == http.StatusNoContent:
+		return false
+	case status == http.StatusNotModified:
+		return false
+	}
+	return true
 }
 
 func decodeBody[T any](r *http.Request, decode func([]byte) (*T, error)) (*T, error) {
@@ -2568,6 +2958,7 @@ func (s *StreamWriter) Finish(ctx context.Context, err error) {
 			handleReqErr(ctx, err, "", s.w)
 			return
 		}
+		AbortResponseCompression(s.w)
 		AbortStream(ctx, err, nil)
 	}
 	if s.started {

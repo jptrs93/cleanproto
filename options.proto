@@ -11,6 +11,12 @@ enum AccessPolicyType {
   ANY_OF = 3;
 }
 
+enum CompressionMode {
+  COMPRESSION_MODE_AUTO = 0;
+  COMPRESSION_MODE_ALWAYS = 1;
+  COMPRESSION_MODE_NEVER = 2;
+}
+
 message AccessPolicy {
   AccessPolicyType policy_type = 1;
   repeated string scopes = 2;
@@ -46,4 +52,5 @@ extend google.protobuf.MethodOptions {
   string operation_id = 50031;
   bool audit = 50032;
   AccessPolicy policy = 50030;
+  CompressionMode compression = 50033;
 }

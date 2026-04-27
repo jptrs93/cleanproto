@@ -137,3 +137,12 @@ var E_Audit = &protoimpl.ExtensionInfo{
 	Tag:           "varint,50032,opt,name=audit",
 	Filename:      OptionsProtoPath,
 }
+
+var E_Compression = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+	ExtensionType: (*int32)(nil),
+	Field:         50033,
+	Name:          "cp.compression",
+	Tag:           "varint,50033,opt,name=compression,enum=cp.CompressionMode",
+	Filename:      OptionsProtoPath,
+}

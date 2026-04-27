@@ -25,7 +25,7 @@ cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out
 | `-proto_path <dir>` | No | Proto import path. Repeatable. | `.` |
 | `-go.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated Go files. | none |
 | `-go.jsontags <style>` | No | Go JSON tags style. Supported: `snake`. | none |
-| `-go.ctxtype <type>` | No | Go server auth context type for handler interface, verifyAuth return, and audit callback when server stubs are generated. | `context.Context` |
+| `-go.ctxtype <type>` | No | Go server auth context type for handler interface, verifyAuth return, post-auth middleware, and audit callback when server stubs are generated. | `context.Context` |
 | `-js.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated JavaScript files. | none |
 | `-ts.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated TypeScript files. | none |
 
@@ -82,6 +82,8 @@ This generates models where the `timestamp` field has the type `Date` and `time.
 | `cp.ts_encode = false` | Keep the field in generated TypeScript models, but skip writing it during TS encoding. |
 | `cp.ts_ignore = true` | Omit the field completely from generated TypeScript models and their encode/decoding. |
 | `cp.json_ignore = true` | Keep the field in generated Go models but force a `json:"-"` struct tag so it is omitted by JSON marshalling. |
+| `cp.compression = COMPRESSION_MODE_ALWAYS` | Always attempt gzip response compression for this RPC when the client accepts it, even if global `MinSize` would skip it. For server-streaming RPCs, this is the only mode that enables gzip. |
+| `cp.compression = COMPRESSION_MODE_NEVER` | Never gzip responses for this RPC. When omitted, the default is `COMPRESSION_MODE_AUTO`, which uses the global mux compression config. |
 
 
 
@@ -440,10 +442,20 @@ import (
 type HandlerFunc = func(context.Context, http.ResponseWriter, *http.Request)
 type MiddlewareFunc func(next HandlerFunc) HandlerFunc
 
-type VerifyAuthFunc func(context.Context, *http.Request, AccessPolicy) (context.Context, error)
+type VerifyAuthFunc func(context.Context, http.ResponseWriter, *http.Request, AccessPolicy) (context.Context, error)
 
-type MuxOptions struct {
-    MaxRequestBodySize *int
+type PostAuthHandlerFunc func(context.Context, http.ResponseWriter, *http.Request)
+type PostAuthMiddlewareFunc func(next PostAuthHandlerFunc) PostAuthHandlerFunc
+
+type AuditFunc func(context.Context, string, error, any, any)
+
+type MuxConfig struct {
+    VerifyAuth          VerifyAuthFunc
+    Audit               AuditFunc
+    MaxRequestBodySize  *int
+    Compression         *CompressionOptions
+    Middlewares         []MiddlewareFunc
+    PostAuthMiddlewares []PostAuthMiddlewareFunc
 }
 
 func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.HandlerFunc {
@@ -455,63 +467,95 @@ func ApplyMiddlewares(h HandlerFunc, middlewares ...MiddlewareFunc) http.Handler
     }
 }
 
+func ApplyPostAuthMiddlewares(h PostAuthHandlerFunc, middlewares ...PostAuthMiddlewareFunc) PostAuthHandlerFunc {
+    for _, m := range middlewares {
+        h = m(h)
+    }
+    return h
+}
+
 type ServerHandler interface {
     GetLibraryV1(context.Context) (*Library, error)
     GetLibraryBookV1(context.Context, *GetBookReq) (*Book, error)
     PostLibraryBookCheckoutV1(context.Context, *CheckoutBookReq) error
 }
 
-func CreateMux(h ServerHandler, verifyAuth VerifyAuthFunc, options *MuxOptions, middlewares ...MiddlewareFunc) *http.ServeMux {
+func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
+    if config == nil {
+        config = &MuxConfig{}
+    }
+    verifyAuth := config.VerifyAuth
     if verifyAuth == nil {
-        verifyAuth = func(ctx context.Context, _ *http.Request, _ AccessPolicy) (context.Context, error) {
+        verifyAuth = func(ctx context.Context, _ http.ResponseWriter, _ *http.Request, _ AccessPolicy) (context.Context, error) {
             return ctx, nil
         }
     }
-    if options == nil {
-        options = &MuxOptions{}
-    }
     m := http.NewServeMux()
-    m.HandleFunc("GET /v1/library", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        ctx, err := verifyAuth(ctx, r, AccessPolicy{})
+    postAuthHandlerGetLibraryV1 := ApplyPostAuthMiddlewares(func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+        res, err := h.GetLibraryV1(authCtx)
+        Respond(authCtx, r, w, res, err)
+    }, config.PostAuthMiddlewares...)
+    routeHandlerGetLibraryV1 := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        authCtx, err := verifyAuth(ctx, w, r, AccessPolicy{})
         if err != nil {
             HandleReqErr(ctx, err, r, w)
             return
         }
-        res, err := h.GetLibraryV1(ctx)
-        Respond(ctx, r, w, res, err)
-    }, middlewares...))
-    m.HandleFunc("GET /v1/library/book", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        ctx, err := verifyAuth(ctx, r, AccessPolicy{})
+        postAuthHandlerGetLibraryV1(authCtx, w, r)
+    }, config.Middlewares...)
+    m.HandleFunc("GET /v1/library", func(w http.ResponseWriter, r *http.Request) {
+        w = WrapResponseCompression(w, r, config.Compression, compressionModeAuto, false)
+        defer CloseResponseCompression(r.Context(), w)
+        routeHandlerGetLibraryV1(w, r)
+    })
+    postAuthHandlerGetLibraryBookV1 := ApplyPostAuthMiddlewares(func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+        req, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, DecodeGetBookReq)
+        if err != nil {
+            HandleReqErr(authCtx, err, r, w)
+            return
+        }
+        res, err := h.GetLibraryBookV1(authCtx, req)
+        Respond(authCtx, r, w, res, err)
+    }, config.PostAuthMiddlewares...)
+    routeHandlerGetLibraryBookV1 := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        authCtx, err := verifyAuth(ctx, w, r, AccessPolicy{})
         if err != nil {
             HandleReqErr(ctx, err, r, w)
             return
         }
-        req, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, DecodeGetBookReq)
+        postAuthHandlerGetLibraryBookV1(authCtx, w, r)
+    }, config.Middlewares...)
+    m.HandleFunc("GET /v1/library/book", func(w http.ResponseWriter, r *http.Request) {
+        w = WrapResponseCompression(w, r, config.Compression, compressionModeAuto, false)
+        defer CloseResponseCompression(r.Context(), w)
+        routeHandlerGetLibraryBookV1(w, r)
+    })
+    postAuthHandlerPostLibraryBookCheckoutV1 := ApplyPostAuthMiddlewares(func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+        req, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, DecodeCheckoutBookReq)
         if err != nil {
-            HandleReqErr(ctx, err, r, w)
+            HandleReqErr(authCtx, err, r, w)
             return
         }
-        res, err := h.GetLibraryBookV1(ctx, req)
-        Respond(ctx, r, w, res, err)
-    }, middlewares...))
-    m.HandleFunc("POST /v1/library/book-checkout", ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        ctx, err := verifyAuth(ctx, r, AccessPolicy{})
+        err := h.PostLibraryBookCheckoutV1(authCtx, req)
         if err != nil {
-            HandleReqErr(ctx, err, r, w)
-            return
-        }
-        req, err := decodeWithMaxBodySize(r, options.MaxRequestBodySize, DecodeCheckoutBookReq)
-        if err != nil {
-            HandleReqErr(ctx, err, r, w)
-            return
-        }
-        err = h.PostLibraryBookCheckoutV1(ctx, req)
-        if err != nil {
-            HandleReqErr(ctx, err, r, w)
+            HandleReqErr(authCtx, err, r, w)
             return
         }
         w.WriteHeader(http.StatusNoContent)
-    }, middlewares...))
+    }, config.PostAuthMiddlewares...)
+    routeHandlerPostLibraryBookCheckoutV1 := ApplyMiddlewares(func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+        authCtx, err := verifyAuth(ctx, w, r, AccessPolicy{})
+        if err != nil {
+            HandleReqErr(ctx, err, r, w)
+            return
+        }
+        postAuthHandlerPostLibraryBookCheckoutV1(authCtx, w, r)
+    }, config.Middlewares...)
+    m.HandleFunc("POST /v1/library/book-checkout", func(w http.ResponseWriter, r *http.Request) {
+        w = WrapResponseCompression(w, r, config.Compression, compressionModeAuto, false)
+        defer CloseResponseCompression(r.Context(), w)
+        routeHandlerPostLibraryBookCheckoutV1(w, r)
+    })
     return m
 }
 ```
@@ -547,13 +591,18 @@ func (server) PostLibraryBookCheckoutV1(context.Context, *example.CheckoutBookRe
 }
 
 func main() {
-    mux := example.CreateMux(server{}, nil, nil)
+    mux := example.CreateMux(server{}, nil)
     log.Fatal(http.ListenAndServe(":8080", mux))
 }
 ```
 
 - `cp.Empty` from `options.proto` is the special empty message type; when used as a request or response it becomes no request body or no response body in the generated server/client surface.
 - `cp.go_custom = true` switches a Go handler into custom mode so the generated interface method receives `*http.Request` and `http.ResponseWriter` directly, while still optionally decoding the protobuf request first.
+- `VerifyAuthFunc` now receives `http.ResponseWriter` in addition to the request and policy, so auth code can attach it to a custom auth context or perform lower-level HTTP integration when needed.
+- `MuxConfig.PostAuthMiddlewares` runs after `VerifyAuthFunc` succeeds and receives the authenticated context type, making it a good place for user-scoped rate limits and other auth-aware transport hooks.
+- Generated Go muxes can gzip responses through `MuxConfig.Compression`. `CompressionOptions.MinSize` defaults to disabled when omitted, and `CompressionOptions.Level` defaults to `gzip.DefaultCompression`.
+- `cp.compression` on an RPC overrides the global decision: `COMPRESSION_MODE_ALWAYS` forces gzip when the client accepts it, `COMPRESSION_MODE_NEVER` disables it, and the default `COMPRESSION_MODE_AUTO` uses the global `MinSize` threshold for unary RPCs.
+- Server-streaming RPCs only gzip when `cp.compression = COMPRESSION_MODE_ALWAYS`. Streaming `COMPRESSION_MODE_AUTO` behaves like disabled compression, `CompressionOptions.MinSize` is ignored once a compressed stream starts, and aborted compressed streams terminate without a final gzip trailer so clients can still detect a broken stream.
 
 <details>
 <summary>Show JavaScript output</summary>

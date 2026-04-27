@@ -28,6 +28,7 @@ var E_AuditIgnore = cp.E_AuditIgnore
 var E_GoCustom = cp.E_GoCustom
 var E_OperationId = cp.E_OperationId
 var E_Audit = cp.E_Audit
+var E_Compression = cp.E_Compression
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
@@ -214,6 +215,56 @@ func auditFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) 
 		return false, nil
 	}
 	return b, nil
+}
+
+func compressionFromMethodOptions(method protoreflect.MethodDescriptor) (int32, error) {
+	opts, ok := method.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return 0, nil
+	}
+	found := false
+	mode := int32(0)
+	opts.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		if !fd.IsExtension() || fd.Number() != 50033 {
+			return true
+		}
+		found = true
+		mode = int32(v.Enum())
+		return false
+	})
+	if found {
+		return mode, nil
+	}
+	unknown := opts.ProtoReflect().GetUnknown()
+	for len(unknown) > 0 {
+		num, typ, n := protowire.ConsumeTag(unknown)
+		if n < 0 {
+			return 0, protowire.ParseError(n)
+		}
+		unknown = unknown[n:]
+		if num != 50033 {
+			m := protowire.ConsumeFieldValue(num, typ, unknown)
+			if m < 0 {
+				return 0, protowire.ParseError(m)
+			}
+			unknown = unknown[m:]
+			continue
+		}
+		if typ != protowire.VarintType {
+			m := protowire.ConsumeFieldValue(num, typ, unknown)
+			if m < 0 {
+				return 0, protowire.ParseError(m)
+			}
+			unknown = unknown[m:]
+			continue
+		}
+		value, m := protowire.ConsumeVarint(unknown)
+		if m < 0 {
+			return 0, protowire.ParseError(m)
+		}
+		return int32(value), nil
+	}
+	return 0, nil
 }
 
 func auditIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) {
