@@ -14,6 +14,10 @@ const optionsProtoPath = cp.OptionsProtoPath
 
 var optionsProtoSource = cp.OptionsProtoSource
 
+const validateProtoPath = cp.ValidateProtoPath
+
+var validateProtoSource = cp.ValidateProtoSource
+
 var E_GoType = cp.E_GoType
 var E_JsType = cp.E_JsType
 var E_GoEncode = cp.E_GoEncode

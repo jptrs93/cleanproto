@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jptrs93/cleanproto/internal/ir"
@@ -21,8 +22,11 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 	resolver := &protocompile.SourceResolver{
 		ImportPaths: p.ImportPaths,
 		Accessor: func(path string) (io.ReadCloser, error) {
-			if path == optionsProtoPath {
+			if path == optionsProtoPath || strings.HasSuffix(path, string(filepath.Separator)+optionsProtoPath) {
 				return io.NopCloser(strings.NewReader(optionsProtoSource)), nil
+			}
+			if path == validateProtoPath || strings.HasSuffix(path, string(filepath.Separator)+validateProtoPath) {
+				return io.NopCloser(strings.NewReader(validateProtoSource)), nil
 			}
 			return os.Open(path)
 		},
@@ -34,6 +38,7 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 	if err != nil {
 		return nil, err
 	}
+	vc := newValidateContext()
 	files, err := compiler.Compile(ctx, filePaths...)
 	if err != nil {
 		return nil, err
@@ -41,7 +46,7 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 
 	var result []ir.File
 	for _, file := range files {
-		irFile, err := fileToIR(file)
+		irFile, err := fileToIR(file, vc)
 		if err != nil {
 			return nil, err
 		}
@@ -65,7 +70,7 @@ func loadBuiltinCatalog(ctx context.Context, compiler protocompile.Compiler) (bu
 		if file.Path() != optionsProtoPath {
 			continue
 		}
-		irFile, err := fileToIR(file)
+		irFile, err := fileToIR(file, nil)
 		if err != nil {
 			return builtinCatalog{}, err
 		}
@@ -84,7 +89,7 @@ func loadBuiltinCatalog(ctx context.Context, compiler protocompile.Compiler) (bu
 	return builtinCatalog{}, fmt.Errorf("%s not found", optionsProtoPath)
 }
 
-func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
+func fileToIR(file protoreflect.FileDescriptor, vc *validateContext) (ir.File, error) {
 	if file.Syntax() != protoreflect.Proto3 {
 		return ir.File{}, fmt.Errorf("only proto3 is supported: %s", file.Path())
 	}
@@ -97,7 +102,7 @@ func fileToIR(file protoreflect.FileDescriptor) (ir.File, error) {
 		Package:   string(file.Package()),
 		GoPackage: goPkg,
 	}
-	msgs, err := collectMessages(file.Messages(), nil)
+	msgs, err := collectMessages(file.Messages(), nil, vc)
 	if err != nil {
 		return ir.File{}, err
 	}
@@ -233,7 +238,7 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 	return result, nil
 }
 
-func collectMessages(messages protoreflect.MessageDescriptors, prefix []string) ([]ir.Message, error) {
+func collectMessages(messages protoreflect.MessageDescriptors, prefix []string, vc *validateContext) ([]ir.Message, error) {
 	var result []ir.Message
 	for i := 0; i < messages.Len(); i++ {
 		msg := messages.Get(i)
@@ -246,14 +251,17 @@ func collectMessages(messages protoreflect.MessageDescriptors, prefix []string) 
 			Name:     msgName,
 			FullName: string(msg.FullName()),
 		}
-		fields, err := collectFields(msg.Fields())
+		if err := vc.warnMessageOptions(msg); err != nil {
+			return nil, err
+		}
+		fields, err := collectFields(msg.Fields(), vc)
 		if err != nil {
 			return nil, err
 		}
 		irMsg.Fields = fields
 		result = append(result, irMsg)
 
-		nested, err := collectMessages(msg.Messages(), nameParts)
+		nested, err := collectMessages(msg.Messages(), nameParts, vc)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +313,7 @@ func collectMessageEnums(messages protoreflect.MessageDescriptors, prefix []stri
 	return result, nil
 }
 
-func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
+func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([]ir.Field, error) {
 	var result []ir.Field
 	for i := 0; i < fields.Len(); i++ {
 		field := fields.Get(i)
@@ -413,8 +421,13 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			return nil, err
 		}
 		isOptional := field.HasPresence() && !field.IsList() && !field.IsMap() && field.Kind() != protoreflect.MessageKind
+		constraints, err := vc.parseFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
 		result = append(result, ir.Field{
 			Name:            ir.JsName(string(field.Name())),
+			ProtoName:       string(field.Name()),
 			Number:          int(field.Number()),
 			Kind:            kind,
 			IsRepeated:      field.IsList(),
@@ -440,6 +453,7 @@ func collectFields(fields protoreflect.FieldDescriptors) ([]ir.Field, error) {
 			MapValueEnum:    mapValueEnum,
 			MessageFullName: msgName,
 			EnumFullName:    enumName,
+			Constraints:     constraints,
 		})
 	}
 	return result, nil

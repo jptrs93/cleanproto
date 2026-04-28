@@ -64,7 +64,7 @@ func TestBuildGoMuxFileUsesToAuditWhenAuditModelsExist(t *testing.T) {
 		msgIndex[msg.FullName] = msg
 	}
 
-	mux, err := buildGoMuxFile(file, msgIndex, file.GoPackage, "")
+	mux, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "")
 	if err != nil {
 		t.Fatalf("buildGoMuxFile: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 		msgIndex[msg.FullName] = msg
 	}
 
-	mux, err := buildGoMuxFile(file, msgIndex, file.GoPackage, "")
+	mux, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "")
 	if err != nil {
 		t.Fatalf("buildGoMuxFile: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestBuildGoMuxFileDoesNotTypeAssertDefaultAuthContext(t *testing.T) {
 		msgIndex[msg.FullName] = msg
 	}
 
-	mux, err := buildGoMuxFile(file, msgIndex, file.GoPackage, "AuthContext")
+	mux, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "AuthContext")
 	if err != nil {
 		t.Fatalf("buildGoMuxFile: %v", err)
 	}

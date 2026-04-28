@@ -96,6 +96,10 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 			HandleReqErr(authCtx, err, r, w)
 			return
 		}
+		if err := req.Validate(); err != nil {
+			HandleReqErr(authCtx, err, r, w)
+			return
+		}
 		res, err := h.GetLibraryBookV1(authCtx, req)
 		Respond(authCtx, r, w, res, err)
 	}
@@ -104,6 +108,10 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 	postAuthHandlerPostLibraryBookCheckoutV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
 		req, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, DecodeCheckoutBookReq)
 		if err != nil {
+			HandleReqErr(authCtx, err, r, w)
+			return
+		}
+		if err := req.Validate(); err != nil {
 			HandleReqErr(authCtx, err, r, w)
 			return
 		}

@@ -3,28 +3,51 @@ syntax = "proto3";
 package example;
 
 import "options.proto";
+import "buf/validate/validate.proto";
 
 option go_package = "example";
 
+enum BookStatus {
+  BOOK_STATUS_UNSPECIFIED = 0;
+  BOOK_STATUS_AVAILABLE = 1;
+  BOOK_STATUS_CHECKED_OUT = 2;
+  BOOK_STATUS_LOST = 3;
+}
+
 message Book {
-  string id = 1;
-  string title = 2;
-  string author = 3;
+  string id = 1 [(buf.validate.field).string.uuid = true];
+  string title = 2 [(buf.validate.field).string = {min_len: 1, max_len: 200}];
+  string author = 3 [(buf.validate.field).string.max_len = 200];
+  int32 page_count = 4 [(buf.validate.field).int32 = {gt: 0, lte: 10000}];
+  string genre = 5 [(buf.validate.field).string = {in: ["fiction", "non-fiction", "biography", "reference"]}];
+  BookStatus status = 6 [(buf.validate.field).enum.defined_only = true];
+  repeated string tags = 7 [(buf.validate.field).repeated = {
+    unique: true,
+    max_items: 20,
+    items: {string: {min_len: 1, max_len: 50}}
+  }];
 }
 
 message Library {
-  string id = 1;
-  string name = 2;
-  repeated Book books = 3;
+  string id = 1 [(buf.validate.field).string.uuid = true];
+  string name = 2 [(buf.validate.field).string.min_len = 1];
+  repeated Book books = 3 [(buf.validate.field).repeated.max_items = 1000];
 }
 
 message GetBookReq {
-  string id = 1;
+  string id = 1 [(buf.validate.field).string.uuid = true];
 }
 
 message CheckoutBookReq {
-  string library_id = 1;
-  string book_id = 2;
+  string library_id = 1 [(buf.validate.field).string.uuid = true];
+  string book_id = 2 [(buf.validate.field).string.uuid = true];
+  string borrower_email = 3 [(buf.validate.field).string.email = true];
+  map<string, string> metadata = 4 [(buf.validate.field).map = {
+    max_pairs: 10,
+    keys: {string: {min_len: 1}},
+    values: {string: {max_len: 200}}
+  }];
+  bytes signature = 5 [(buf.validate.field).bytes.len = 64];
 }
 
 service LibraryService {

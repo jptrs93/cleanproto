@@ -26,6 +26,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	}
 	msgIndex := indexMessages(files)
 	enumIndex := indexEnums(files)
+	validateNeeds := computeValidateNeeds(msgIndex)
 	var outputs []generate.OutputFile
 	var utilPkg string
 	var utilDir string
@@ -67,12 +68,22 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 				Content: auditContent,
 			})
 		}
+		validateContent, err := buildGoValidateFile(file, msgIndex, enumIndex, validateNeeds, pkg)
+		if err != nil {
+			return nil, err
+		}
+		if len(validateContent) > 0 {
+			outputs = append(outputs, generate.OutputFile{
+				Path:    filepath.Join(goOut, "validate.gen.go"),
+				Content: validateContent,
+			})
+		}
 		if len(file.Services) > 0 {
 			needMuxUtil = true
 			if muxUtilDir == "" {
 				muxUtilDir = goOut
 			}
-			muxContent, err := buildGoMuxFile(file, msgIndex, pkg, options.GoCtxType)
+			muxContent, err := buildGoMuxFile(file, msgIndex, validateNeeds, pkg, options.GoCtxType)
 			if err != nil {
 				return nil, err
 			}
@@ -103,26 +114,27 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	return outputs, nil
 }
 
-func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, goCtxType string) (string, error) {
+func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds map[string]bool, pkg string, goCtxType string) (string, error) {
 	type muxMethod struct {
-		Name        string
-		Handler     string
-		HTTPMethod  string
-		Path        string
-		Input       string
-		Output      string
-		InputEmpty  bool
-		OutEmpty    bool
-		GoCustom    bool
-		Audit       bool
-		InputAudit  bool
-		OutputAudit bool
-		OperationID string
-		Streaming   bool
-		NoAuth      bool
-		Scopes      []string
-		PolicyType  int32
-		Compression int32
+		Name             string
+		Handler          string
+		HTTPMethod       string
+		Path             string
+		Input            string
+		Output           string
+		InputEmpty       bool
+		OutEmpty         bool
+		GoCustom         bool
+		Audit            bool
+		InputAudit       bool
+		OutputAudit      bool
+		OperationID      string
+		Streaming        bool
+		NoAuth           bool
+		Scopes           []string
+		PolicyType       int32
+		Compression      int32
+		InputValidatable bool
 	}
 	methods := make([]muxMethod, 0)
 	hasAudit := false
@@ -160,24 +172,25 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				}
 			}
 			methods = append(methods, muxMethod{
-				Name:        m.Name,
-				Handler:     normalizeGoMethodName(m.Name),
-				HTTPMethod:  httpMethod,
-				Path:        path,
-				Input:       in.Name,
-				Output:      out.Name,
-				InputEmpty:  in.Name == "Empty" || strings.HasSuffix(m.InputFullName, ".Empty"),
-				OutEmpty:    outEmpty,
-				GoCustom:    m.GoCustom,
-				Audit:       m.Audit,
-				InputAudit:  auditNeeds[m.InputFullName],
-				OutputAudit: auditNeeds[m.OutputFullName],
-				OperationID: m.OperationID,
-				Streaming:   m.IsStreamingServer,
-				NoAuth:      m.PolicyType == 1,
-				Scopes:      append([]string(nil), m.PolicyScopes...),
-				PolicyType:  m.PolicyType,
-				Compression: m.CompressionMode,
+				Name:             m.Name,
+				Handler:          normalizeGoMethodName(m.Name),
+				HTTPMethod:       httpMethod,
+				Path:             path,
+				Input:            in.Name,
+				Output:           out.Name,
+				InputEmpty:       in.Name == "Empty" || strings.HasSuffix(m.InputFullName, ".Empty"),
+				OutEmpty:         outEmpty,
+				GoCustom:         m.GoCustom,
+				Audit:            m.Audit,
+				InputAudit:       auditNeeds[m.InputFullName],
+				OutputAudit:      auditNeeds[m.OutputFullName],
+				OperationID:      m.OperationID,
+				Streaming:        m.IsStreamingServer,
+				NoAuth:           m.PolicyType == 1,
+				Scopes:           append([]string(nil), m.PolicyScopes...),
+				PolicyType:       m.PolicyType,
+				Compression:      m.CompressionMode,
+				InputValidatable: validateNeeds[m.InputFullName],
 			})
 			if m.Audit {
 				hasAudit = true
@@ -328,6 +341,17 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 		b.WriteString("\t}\n")
 	}
 	b.WriteString("\tm := http.NewServeMux()\n")
+	writeValidateBlock := func(method muxMethod, handlerCtxName string) {
+		if !method.InputValidatable || method.InputEmpty {
+			return
+		}
+		b.WriteString("\t\t\tif err := req.Validate(); err != nil {\n")
+		b.WriteString("\t\t\t\tHandleReqErr(")
+		b.WriteString(handlerCtxName)
+		b.WriteString(", err, r, w)\n")
+		b.WriteString("\t\t\t\treturn\n")
+		b.WriteString("\t\t\t}\n")
+	}
 	writeRouteHandlerBody := func(method muxMethod) {
 		handlerCtxName := "authCtx"
 		if method.GoCustom {
@@ -347,6 +371,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				b.WriteString(", err, r, w)\n")
 				b.WriteString("\t\t\t\treturn\n")
 				b.WriteString("\t\t\t}\n")
+				writeValidateBlock(method, handlerCtxName)
 				b.WriteString("\t\t\terr = h.")
 				b.WriteString(method.Handler)
 				b.WriteString("(")
@@ -372,6 +397,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 				b.WriteString(", err, r, w)\n")
 				b.WriteString("\t\t\t\treturn\n")
 				b.WriteString("\t\t\t}\n")
+				writeValidateBlock(method, handlerCtxName)
 			}
 			if method.InputEmpty {
 				b.WriteString("\t\t\tseq := h.")
@@ -438,6 +464,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, pkg string, go
 			b.WriteString(", err, r, w)\n")
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
+			writeValidateBlock(method, handlerCtxName)
 		}
 		if method.OutEmpty {
 			if method.InputEmpty {
@@ -2556,9 +2583,13 @@ func handleReqErr(ctx context.Context, err error, path string, w http.ResponseWr
 	var httpErr ApiErr
 	if !errors.As(err, &httpErr) {
 		var httpErrPtr *ApiErr
-		if errors.As(err, &httpErrPtr) && httpErrPtr != nil {
+		var validationErr *ValidationError
+		switch {
+		case errors.As(err, &httpErrPtr) && httpErrPtr != nil:
 			httpErr = *httpErrPtr
-		} else {
+		case errors.As(err, &validationErr):
+			httpErr = ApiErr{DisplayErr: validationErr.Error(), Code: http.StatusBadRequest}
+		default:
 			httpErr = ApiErr{DisplayErr: "Unknown server error", Code: http.StatusInternalServerError}
 		}
 	}
@@ -2668,6 +2699,58 @@ func (e ApiErr) Error() string {
 		return e.InternalErr
 	}
 	return e.DisplayErr
+}
+
+// ValidationError represents a buf.validate constraint failure on a request payload.
+// The Path slice records the path to the offending field, joined with dots when
+// rendered (e.g. "user.email" or "items[3].name").
+type ValidationError struct {
+	Path   []string
+	Reason string
+}
+
+func (e *ValidationError) Error() string {
+	return joinValidationPath(e.Path) + ": " + e.Reason
+}
+
+func joinValidationPath(parts []string) string {
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	}
+	n := len(parts) - 1
+	for _, p := range parts {
+		n += len(p)
+	}
+	out := make([]byte, 0, n)
+	for i, p := range parts {
+		if i > 0 && len(p) > 0 && p[0] != '[' {
+			out = append(out, '.')
+		}
+		out = append(out, p...)
+	}
+	return string(out)
+}
+
+func newValidationError(path []string, reason string) *ValidationError {
+	return &ValidationError{Path: path, Reason: reason}
+}
+
+func wrapValidationError(err error, segment string) error {
+	if err == nil {
+		return nil
+	}
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		path := make([]string, 0, len(ve.Path)+1)
+		path = append(path, segment)
+		path = append(path, ve.Path...)
+		ve.Path = path
+		return ve
+	}
+	return err
 }
 `
 

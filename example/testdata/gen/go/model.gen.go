@@ -6,10 +6,23 @@ import (
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
+type BookStatus int32
+
+const (
+	BookStatus_BOOK_STATUS_UNSPECIFIED BookStatus = 0
+	BookStatus_BOOK_STATUS_AVAILABLE   BookStatus = 1
+	BookStatus_BOOK_STATUS_CHECKED_OUT BookStatus = 2
+	BookStatus_BOOK_STATUS_LOST        BookStatus = 3
+)
+
 type Book struct {
-	ID     string `json:"id,omitempty"`
-	Title  string `json:"title,omitempty"`
-	Author string `json:"author,omitempty"`
+	ID        string     `json:"id,omitempty"`
+	Title     string     `json:"title,omitempty"`
+	Author    string     `json:"author,omitempty"`
+	PageCount int32      `json:"page_count"`
+	Genre     string     `json:"genre,omitempty"`
+	Status    BookStatus `json:"status"`
+	Tags      []string   `json:"tags,omitempty"`
 }
 
 func (m *Book) Encode() []byte {
@@ -17,6 +30,10 @@ func (m *Book) Encode() []byte {
 	b = AppendStringField(b, m.ID, 1)
 	b = AppendStringField(b, m.Title, 2)
 	b = AppendStringField(b, m.Author, 3)
+	b = AppendInt32Field(b, m.PageCount, 4)
+	b = AppendStringField(b, m.Genre, 5)
+	b = AppendInt32Field(b, int32(m.Status), 6)
+	b = AppendRepeated(b, m.Tags, AppendFieldDecorator(AppendStringField, 7))
 	return b
 }
 
@@ -37,6 +54,22 @@ func DecodeBook(b []byte) (*Book, error) {
 			b, m.Title, err = ConsumeString(b, typ)
 		case 3:
 			b, m.Author, err = ConsumeString(b, typ)
+		case 4:
+			b, m.PageCount, err = ConsumeVarInt32(b, typ)
+		case 5:
+			b, m.Genre, err = ConsumeString(b, typ)
+		case 6:
+			var raw int32
+			b, raw, err = ConsumeVarInt32(b, typ)
+			if err == nil {
+				m.Status = BookStatus(raw)
+			}
+		case 7:
+			var item string
+			b, item, err = ConsumeRepeatedElement(b, typ, ConsumeString)
+			if err == nil {
+				m.Tags = append(m.Tags, item)
+			}
 		default:
 			b, err = SkipFieldValue(b, num, typ)
 		}
@@ -136,14 +169,20 @@ func DecodeGetBookReq(b []byte) (*GetBookReq, error) {
 }
 
 type CheckoutBookReq struct {
-	LibraryID string `json:"library_id,omitempty"`
-	BookID    string `json:"book_id,omitempty"`
+	LibraryID     string            `json:"library_id,omitempty"`
+	BookID        string            `json:"book_id,omitempty"`
+	BorrowerEmail string            `json:"borrower_email,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	Signature     []byte            `json:"signature"`
 }
 
 func (m *CheckoutBookReq) Encode() []byte {
 	var b []byte
 	b = AppendStringField(b, m.LibraryID, 1)
 	b = AppendStringField(b, m.BookID, 2)
+	b = AppendStringField(b, m.BorrowerEmail, 3)
+	b = AppendMap(b, m.Metadata, 4, AppendFieldDecorator(AppendStringField, 1), AppendFieldDecorator(AppendStringField, 2))
+	b = AppendBytesField(b, m.Signature, 5)
 	return b
 }
 
@@ -162,6 +201,15 @@ func DecodeCheckoutBookReq(b []byte) (*CheckoutBookReq, error) {
 			b, m.LibraryID, err = ConsumeString(b, typ)
 		case 2:
 			b, m.BookID, err = ConsumeString(b, typ)
+		case 3:
+			b, m.BorrowerEmail, err = ConsumeString(b, typ)
+		case 4:
+			if m.Metadata == nil {
+				m.Metadata = make(map[string]string)
+			}
+			b, err = ConsumeMapEntry(b, typ, m.Metadata, ConsumeString, ConsumeString)
+		case 5:
+			b, m.Signature, err = ConsumeBytesCopy(b, typ)
 		default:
 			b, err = SkipFieldValue(b, num, typ)
 		}
