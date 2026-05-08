@@ -514,7 +514,7 @@ func isSupportedGoType(kind ir.Kind, msgName string, goType string) bool {
 }
 
 func isSupportedJSType(kind ir.Kind, msgName string, jsType string) bool {
-	if jsType != "number" && jsType != "bigint" && jsType != "Date" {
+	if jsType != "number" && jsType != "bigint" && jsType != "Date" && jsType != "LocalDate" {
 		return false
 	}
 	if jsType == "Date" {
@@ -522,6 +522,9 @@ func isSupportedJSType(kind ir.Kind, msgName string, jsType string) bool {
 			return true
 		}
 		return kind == ir.KindMessage && msgName == "google.protobuf.Timestamp"
+	}
+	if jsType == "LocalDate" {
+		return kind == ir.KindInt32
 	}
 	if kind == ir.KindInt32 || kind == ir.KindInt64 {
 		return true

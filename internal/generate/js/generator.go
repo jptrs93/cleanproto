@@ -710,7 +710,7 @@ func jsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
 		}
 		return "0"
 	}
-	if field.JSType == "Date" {
+	if field.JSType == "Date" || field.JSType == "LocalDate" {
 		if field.IsOptional {
 			return "undefined"
 		}
@@ -746,6 +746,9 @@ func jsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
 }
 
 func jsBaseType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
+	if field.JSType == "LocalDate" {
+		return "Date", nil
+	}
 	if field.JSType != "" {
 		return field.JSType, nil
 	}
@@ -783,7 +786,7 @@ func jsPresenceCheck(field ir.Field, name string) string {
 	if field.JSType == "number" {
 		return name + " !== undefined && " + name + " !== null && " + name + " !== 0"
 	}
-	if field.JSType == "Date" {
+	if field.JSType == "Date" || field.JSType == "LocalDate" {
 		return name + " instanceof Date && " + name + ".getTime() !== 0"
 	}
 	if field.Kind == ir.KindMessage {
@@ -982,6 +985,11 @@ func jsEncodeNativeField(field ir.Field, name, indent string) (string, error) {
 			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int64(Math.trunc(%s.getTime()));\n", indent, field.Number, name)
 			return b.String(), nil
 		}
+	case "LocalDate":
+		if field.Kind == ir.KindInt32 {
+			fmt.Fprintf(&b, "%swriter.uint32(tag(%d, WIRE.VARINT)).int32(Math.trunc(%s.getTime() / 86400000));\n", indent, field.Number, name)
+			return b.String(), nil
+		}
 	}
 	return "", fmt.Errorf("unsupported js native type conversion for field: %s", field.Name)
 }
@@ -1055,6 +1063,8 @@ func jsDecodeNativeField(field ir.Field, fieldName string) (string, bool, error)
 				b.WriteString(".push(BigInt(reader.int32()));\n")
 			} else if field.JSType == "Date" {
 				b.WriteString(".push(new Date(reader.int32() * 1000));\n")
+			} else if field.JSType == "LocalDate" {
+				b.WriteString(".push(new Date(reader.int32() * 86400000));\n")
 			} else {
 				b.WriteString(".push(reader.int32());\n")
 			}
@@ -1092,6 +1102,9 @@ func jsDecodeNativeField(field ir.Field, fieldName string) (string, bool, error)
 		}
 		if field.JSType == "Date" {
 			return "                " + fieldName + " = new Date(reader.int32() * 1000);\n", false, nil
+		}
+		if field.JSType == "LocalDate" {
+			return "                " + fieldName + " = new Date(reader.int32() * 86400000);\n", false, nil
 		}
 		return "                " + fieldName + " = reader.int32();\n", false, nil
 	}
