@@ -23,6 +23,7 @@ var E_JsType = cp.E_JsType
 var E_GoEncode = cp.E_GoEncode
 var E_JsEncode = cp.E_JsEncode
 var E_GoIgnore = cp.E_GoIgnore
+var E_GoSlicePtr = cp.E_GoSlicePtr
 var E_JsIgnore = cp.E_JsIgnore
 var E_TsType = cp.E_TsType
 var E_TsEncode = cp.E_TsEncode
@@ -132,6 +133,22 @@ func goIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) 
 		return false, nil
 	}
 	return b, nil
+}
+
+func goSlicePtrFromFieldOptions(field protoreflect.FieldDescriptor) (*bool, error) {
+	opts, ok := field.Options().(*descriptorpb.FieldOptions)
+	if !ok || opts == nil {
+		return nil, nil
+	}
+	if !proto.HasExtension(opts, E_GoSlicePtr) {
+		return nil, nil
+	}
+	val := proto.GetExtension(opts, E_GoSlicePtr)
+	b, ok := val.(bool)
+	if !ok {
+		return nil, nil
+	}
+	return &b, nil
 }
 
 func jsIgnoreFromFieldOptions(field protoreflect.FieldDescriptor) (bool, error) {

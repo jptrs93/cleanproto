@@ -873,13 +873,22 @@ func (g *validateGen) emitRepeatedField(b *strings.Builder, field ir.Field, rece
 	b.WriteString("\t\t_ = i\n")
 	itemPath := indexedPathExpr(pathExpr, "%d", "i")
 	if needsRecurseMessage {
-		b.WriteString("\t\tif item != nil {\n")
-		b.WriteString("\t\t\tif err := item.Validate(); err != nil {\n")
-		b.WriteString("\t\t\t\treturn wrapValidationError(err, ")
-		b.WriteString(itemPath)
-		b.WriteString(")\n")
-		b.WriteString("\t\t\t}\n")
-		b.WriteString("\t\t}\n")
+		valueSlice := goRepeatedValueSlice(field)
+		if !valueSlice {
+			b.WriteString("\t\tif item != nil {\n")
+			b.WriteString("\t\t\tif err := item.Validate(); err != nil {\n")
+			b.WriteString("\t\t\t\treturn wrapValidationError(err, ")
+			b.WriteString(itemPath)
+			b.WriteString(")\n")
+			b.WriteString("\t\t\t}\n")
+			b.WriteString("\t\t}\n")
+		} else {
+			b.WriteString("\t\tif err := item.Validate(); err != nil {\n")
+			b.WriteString("\t\t\treturn wrapValidationError(err, ")
+			b.WriteString(itemPath)
+			b.WriteString(")\n")
+			b.WriteString("\t\t}\n")
+		}
 	}
 	if hasItemConstraints {
 		itemField := elementField(field)

@@ -340,6 +340,7 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 		jsEncode := true
 		tsEncode := true
 		var goIgnore bool
+		var goSlicePtr *bool
 		var jsIgnore bool
 		var tsIgnore bool
 		var jsonIgnore bool
@@ -401,6 +402,13 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 		if err != nil {
 			return nil, err
 		}
+		goSlicePtr, err = goSlicePtrFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		if goSlicePtr != nil && !field.IsList() {
+			return nil, fmt.Errorf("cp.go_slice_ptr only applies to repeated fields: %s", field.FullName())
+		}
 		jsIgnore, err = jsIgnoreFromFieldOptions(field)
 		if err != nil {
 			return nil, err
@@ -441,6 +449,7 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 			TSType:          tsType,
 			GoEncode:        goEncode,
 			GoIgnore:        goIgnore,
+			GoSlicePtr:      goSlicePtr,
 			JsEncode:        jsEncode,
 			JsIgnore:        jsIgnore,
 			TsEncode:        tsEncode,

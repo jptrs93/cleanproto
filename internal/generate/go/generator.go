@@ -864,6 +864,18 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex ma
 	return out, usesUUID, usesTime, nil
 }
 
+// goRepeatedValueSlice reports whether a repeated message field should be
+// generated as []T instead of the default []*T, based on cp.go_slice_ptr=false.
+func goRepeatedValueSlice(field ir.Field) bool {
+	if !field.IsRepeated || field.Kind != ir.KindMessage {
+		return false
+	}
+	if field.IsTimestamp || field.IsDuration || field.GoType != "" {
+		return false
+	}
+	return field.GoSlicePtr != nil && !*field.GoSlicePtr
+}
+
 func goVisibleFields(fields []ir.Field) []ir.Field {
 	visible := make([]ir.Field, 0, len(fields))
 	for _, field := range fields {
@@ -952,6 +964,9 @@ func goFieldType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[s
 			msg, ok := msgIndex[field.MessageFullName]
 			if !ok {
 				return "", false, fmt.Errorf("unknown message type: %s", field.MessageFullName)
+			}
+			if goRepeatedValueSlice(field) {
+				return "[]" + msg.Name, false, nil
 			}
 			return "[]*" + msg.Name, false, nil
 		}
@@ -1097,9 +1112,11 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 			lines = append(lines, mapLines...)
 		case field.IsRepeated && field.Kind == ir.KindMessage:
 			lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-			lines = append(lines, "if item == nil {", "continue", "}")
+			if !goRepeatedValueSlice(field) {
+				lines = append(lines, "if item == nil {", "continue", "}")
+			}
 			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
-			lines = append(lines, fmt.Sprintf("b = protowire.AppendBytes(b, item.Encode())"))
+			lines = append(lines, "b = protowire.AppendBytes(b, item.Encode())")
 			lines = append(lines, "}")
 		case field.IsRepeated:
 			if field.IsPacked && isGoPackable(field.Kind) {
@@ -1828,7 +1845,11 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 			c.Lines = append(c.Lines, fmt.Sprintf("var item *%s", msgType))
 			c.Lines = append(c.Lines, fmt.Sprintf("item, err = Decode%s(msgBytes)", msgType))
 			c.Lines = append(c.Lines, "if err == nil {")
-			c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+			if goRepeatedValueSlice(field) {
+				c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, *item)", fieldName, fieldName))
+			} else {
+				c.Lines = append(c.Lines, fmt.Sprintf("%s = append(%s, item)", fieldName, fieldName))
+			}
 			c.Lines = append(c.Lines, "}")
 			c.Lines = append(c.Lines, "}")
 		case field.IsRepeated:

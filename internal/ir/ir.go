@@ -60,6 +60,7 @@ type Field struct {
 	TSType          string
 	GoEncode        bool
 	GoIgnore        bool
+	GoSlicePtr      *bool
 	JsEncode        bool
 	JsIgnore        bool
 	TsEncode        bool

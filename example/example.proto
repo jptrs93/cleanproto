@@ -18,6 +18,8 @@ message Library {
   map<int32, int64> counts = 2;
   repeated int32 tags = 3 [packed = true];
   repeated string names = 4;
+  repeated Book featured = 5 [(cp.go_slice_ptr) = false];
+  repeated Book recommended = 6;
 }
 
 message NativeTypeCoverage {
