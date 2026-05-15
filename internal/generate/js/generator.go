@@ -140,7 +140,7 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				decodeImports["decode"+outType] = struct{}{}
 			}
 			methods = append(methods, capiMethod{
-				Name:       lowerFirst(m.Name),
+				Name:       lowerFirst(normalizeJsMethodName(m.Name)),
 				Path:       path,
 				HTTPMethod: httpMethod,
 				InputType:  inType,
@@ -326,6 +326,27 @@ func lowerFirst(s string) string {
 	return string(r)
 }
 
+// normalizeJsMethodName collapses underscore-separated segments into a single
+// CamelCase identifier so kebab-suffix RPCs (e.g. PostUsersChange_PasswordV1)
+// produce clean JS method names (postUsersChangePasswordV1) instead of leaking
+// the underscore into the JS surface.
+func normalizeJsMethodName(name string) string {
+	if name == "" {
+		return name
+	}
+	parts := strings.Split(name, "_")
+	var b strings.Builder
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		r := []rune(p)
+		r[0] = unicode.ToUpper(r[0])
+		b.WriteString(string(r))
+	}
+	return b.String()
+}
+
 func deriveHTTP(name string) (method string, path string, ok bool) {
 	prefixes := []string{"Get", "Post", "Put", "Patch", "Delete"}
 	method = ""
@@ -340,6 +361,11 @@ func deriveHTTP(name string) (method string, path string, ok bool) {
 	if method == "" || rest == "" {
 		return "", "", false
 	}
+	version := ""
+	if strings.HasSuffix(rest, "V1") {
+		rest = strings.TrimSuffix(rest, "V1")
+		version = "v1"
+	}
 	underscoreParts := strings.Split(rest, "_")
 	if len(underscoreParts) == 0 {
 		return "", "", false
@@ -348,7 +374,14 @@ func deriveHTTP(name string) (method string, path string, ok bool) {
 	if len(first) == 0 {
 		return "", "", false
 	}
-	base := "/" + strings.Join(first, "/")
+	base := "/"
+	if version != "" {
+		base += version
+		if len(first) > 0 {
+			base += "/"
+		}
+	}
+	base += strings.Join(first, "/")
 	if len(underscoreParts) == 1 {
 		return method, base, true
 	}
