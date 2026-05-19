@@ -54,4 +54,10 @@ service LibraryService {
   rpc GetLibraryV1(cp.Empty) returns (Library);
   rpc GetLibraryBookV1(GetBookReq) returns (Book);
   rpc PostLibraryBook_CheckoutV1(CheckoutBookReq) returns (cp.Empty);
+  // Hijacked into a WebSocket upgrade by the handler; gzip would
+  // corrupt the upgraded connection, so disable response compression
+  // regardless of the mux-level config.
+  rpc GetLibraryEventsV1(cp.Empty) returns (cp.Empty) {
+    option (cp.compression) = COMPRESSION_MODE_NEVER;
+  }
 }
