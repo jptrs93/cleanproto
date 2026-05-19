@@ -136,11 +136,17 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 		Compression      int32
 		InputValidatable bool
 	}
+	type muxService struct {
+		HandlerName string
+		MuxName     string
+		Methods     []muxMethod
+	}
 	methods := make([]muxMethod, 0)
-	hasAudit := false
+	services := make([]muxService, 0, len(file.Services))
 	hasStream := false
 	auditNeeds := computeAuditMessages(file, msgIndex)
 	for _, svc := range file.Services {
+		svcMethods := make([]muxMethod, 0, len(svc.Methods))
 		for _, m := range svc.Methods {
 			httpMethod, path, ok := deriveHTTPGo(m.Name)
 			if !ok {
@@ -171,7 +177,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 					return "", fmt.Errorf("streaming RPC %s cannot also use cp.go_custom", m.Name)
 				}
 			}
-			methods = append(methods, muxMethod{
+			method := muxMethod{
 				Name:             m.Name,
 				Handler:          normalizeGoMethodName(m.Name),
 				HTTPMethod:       httpMethod,
@@ -191,17 +197,38 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 				PolicyType:       m.PolicyType,
 				Compression:      m.CompressionMode,
 				InputValidatable: validateNeeds[m.InputFullName],
-			})
-			if m.Audit {
-				hasAudit = true
 			}
+			methods = append(methods, method)
+			svcMethods = append(svcMethods, method)
 			if m.IsStreamingServer {
 				hasStream = true
 			}
 		}
+		if len(svcMethods) > 0 {
+			name := normalizeGoMethodName(svc.Name)
+			services = append(services, muxService{
+				HandlerName: name + "Handler",
+				MuxName:     "Create" + name + "Mux",
+				Methods:     svcMethods,
+			})
+		}
 	}
 	if len(methods) == 0 {
 		return "", nil
+	}
+	if len(file.Services) > 1 {
+		seenHandlers := map[string]struct{}{}
+		seenMuxes := map[string]struct{}{}
+		for _, svc := range services {
+			if _, ok := seenHandlers[svc.HandlerName]; ok {
+				return "", fmt.Errorf("duplicate generated service handler name: %s", svc.HandlerName)
+			}
+			seenHandlers[svc.HandlerName] = struct{}{}
+			if _, ok := seenMuxes[svc.MuxName]; ok {
+				return "", fmt.Errorf("duplicate generated service mux name: %s", svc.MuxName)
+			}
+			seenMuxes[svc.MuxName] = struct{}{}
+		}
 	}
 	ctxType := strings.TrimSpace(goCtxType)
 	if ctxType == "" {
@@ -278,69 +305,6 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 	b.WriteString("\t}\n")
 	b.WriteString("\treturn compress(routeHandler)\n")
 	b.WriteString("}\n\n")
-	b.WriteString("type ServerHandler interface {\n")
-	for _, m := range methods {
-		if m.GoCustom {
-			b.WriteString("\t")
-			b.WriteString(m.Handler)
-			b.WriteString("(")
-			b.WriteString(ctxType)
-			if !m.InputEmpty {
-				b.WriteString(", *")
-				b.WriteString(m.Input)
-			}
-			b.WriteString(", *http.Request, http.ResponseWriter) error\n")
-			continue
-		}
-		b.WriteString("\t")
-		b.WriteString(m.Handler)
-		b.WriteString("(")
-		b.WriteString(ctxType)
-		if !m.InputEmpty {
-			b.WriteString(", *")
-			b.WriteString(m.Input)
-		}
-		if m.Streaming {
-			b.WriteString(") iter.Seq2[*")
-			b.WriteString(m.Output)
-			b.WriteString(", error]\n")
-		} else if m.OutEmpty {
-			b.WriteString(") error\n")
-		} else {
-			b.WriteString(") (*")
-			b.WriteString(m.Output)
-			b.WriteString(", error)\n")
-		}
-	}
-	b.WriteString("}\n\n")
-	b.WriteString("func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {\n")
-	b.WriteString("\tif config == nil {\n")
-	b.WriteString("\t\tconfig = &MuxConfig{}\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tverifyAuth := config.VerifyAuth\n")
-	b.WriteString("\tif verifyAuth == nil {\n")
-	b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ http.ResponseWriter, _ *http.Request, _ AccessPolicy) (")
-	b.WriteString(ctxType)
-	b.WriteString(", error) {\n")
-	if ctxType == "context.Context" {
-		b.WriteString("\t\t\treturn ctx, nil\n")
-	} else {
-		b.WriteString("\t\t\tvar authCtx ")
-		b.WriteString(ctxType)
-		b.WriteString("\n")
-		b.WriteString("\t\t\treturn authCtx, nil\n")
-	}
-	b.WriteString("\t\t}\n")
-	b.WriteString("\t}\n")
-	if hasAudit {
-		b.WriteString("\taudit := config.Audit\n")
-		b.WriteString("\tif audit == nil {\n")
-		b.WriteString("\t\taudit = func(")
-		b.WriteString(ctxType)
-		b.WriteString(", string, error, any, any) {}\n")
-		b.WriteString("\t}\n")
-	}
-	b.WriteString("\tm := http.NewServeMux()\n")
 	writeValidateBlock := func(method muxMethod, handlerCtxName string) {
 		if !method.InputValidatable || method.InputEmpty {
 			return
@@ -564,39 +528,132 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 		b.WriteString(handlerCtxName)
 		b.WriteString(", r, w, res, err)\n")
 	}
-	for _, m := range methods {
-		accessPolicyName := lowerFirst(m.Handler) + "AccessPolicy"
-		postAuthHandlerName := "postAuthHandler" + m.Handler
-		b.WriteString("\t")
-		b.WriteString(accessPolicyName)
-		b.WriteString(" := ")
-		b.WriteString(policyLiteral(m.PolicyType, m.Scopes))
-		b.WriteString("\n")
-		b.WriteString("\t")
-		b.WriteString(postAuthHandlerName)
-		b.WriteString(" := func(authCtx ")
-		b.WriteString(ctxType)
-		b.WriteString(", w http.ResponseWriter, r *http.Request) {\n")
-		writeRouteHandlerBody(m)
+	methodsHaveAudit := func(methods []muxMethod) bool {
+		for _, m := range methods {
+			if m.Audit {
+				return true
+			}
+		}
+		return false
+	}
+	writeHandlerInterface := func(handlerName string, methods []muxMethod) {
+		b.WriteString("type ")
+		b.WriteString(handlerName)
+		b.WriteString(" interface {\n")
+		for _, m := range methods {
+			if m.GoCustom {
+				b.WriteString("\t")
+				b.WriteString(m.Handler)
+				b.WriteString("(")
+				b.WriteString(ctxType)
+				if !m.InputEmpty {
+					b.WriteString(", *")
+					b.WriteString(m.Input)
+				}
+				b.WriteString(", *http.Request, http.ResponseWriter) error\n")
+				continue
+			}
+			b.WriteString("\t")
+			b.WriteString(m.Handler)
+			b.WriteString("(")
+			b.WriteString(ctxType)
+			if !m.InputEmpty {
+				b.WriteString(", *")
+				b.WriteString(m.Input)
+			}
+			if m.Streaming {
+				b.WriteString(") iter.Seq2[*")
+				b.WriteString(m.Output)
+				b.WriteString(", error]\n")
+			} else if m.OutEmpty {
+				b.WriteString(") error\n")
+			} else {
+				b.WriteString(") (*")
+				b.WriteString(m.Output)
+				b.WriteString(", error)\n")
+			}
+		}
+		b.WriteString("}\n\n")
+	}
+	writeCreateMux := func(muxName string, handlerName string, methods []muxMethod) {
+		b.WriteString("func ")
+		b.WriteString(muxName)
+		b.WriteString("(h ")
+		b.WriteString(handlerName)
+		b.WriteString(", config *MuxConfig) *http.ServeMux {\n")
+		b.WriteString("\tif config == nil {\n")
+		b.WriteString("\t\tconfig = &MuxConfig{}\n")
 		b.WriteString("\t}\n")
-		b.WriteString("\tm.HandleFunc(\"")
-		b.WriteString(m.HTTPMethod)
-		b.WriteString(" ")
-		b.WriteString(m.Path)
-		b.WriteString("\", buildHandlerFunc(config, verifyAuth, ")
-		b.WriteString(accessPolicyName)
-		b.WriteString(", ")
-		b.WriteString(postAuthHandlerName)
-		b.WriteString(", ")
-		b.WriteString(compressionModeLiteral(m.Compression))
-		if m.Streaming {
-			b.WriteString(", true))\n")
+		b.WriteString("\tverifyAuth := config.VerifyAuth\n")
+		b.WriteString("\tif verifyAuth == nil {\n")
+		b.WriteString("\t\tverifyAuth = func(ctx context.Context, _ http.ResponseWriter, _ *http.Request, _ AccessPolicy) (")
+		b.WriteString(ctxType)
+		b.WriteString(", error) {\n")
+		if ctxType == "context.Context" {
+			b.WriteString("\t\t\treturn ctx, nil\n")
 		} else {
-			b.WriteString(", false))\n")
+			b.WriteString("\t\t\tvar authCtx ")
+			b.WriteString(ctxType)
+			b.WriteString("\n")
+			b.WriteString("\t\t\treturn authCtx, nil\n")
+		}
+		b.WriteString("\t\t}\n")
+		b.WriteString("\t}\n")
+		if methodsHaveAudit(methods) {
+			b.WriteString("\taudit := config.Audit\n")
+			b.WriteString("\tif audit == nil {\n")
+			b.WriteString("\t\taudit = func(")
+			b.WriteString(ctxType)
+			b.WriteString(", string, error, any, any) {}\n")
+			b.WriteString("\t}\n")
+		}
+		b.WriteString("\tm := http.NewServeMux()\n")
+		for _, m := range methods {
+			accessPolicyName := lowerFirst(m.Handler) + "AccessPolicy"
+			postAuthHandlerName := "postAuthHandler" + m.Handler
+			b.WriteString("\t")
+			b.WriteString(accessPolicyName)
+			b.WriteString(" := ")
+			b.WriteString(policyLiteral(m.PolicyType, m.Scopes))
+			b.WriteString("\n")
+			b.WriteString("\t")
+			b.WriteString(postAuthHandlerName)
+			b.WriteString(" := func(authCtx ")
+			b.WriteString(ctxType)
+			b.WriteString(", w http.ResponseWriter, r *http.Request) {\n")
+			writeRouteHandlerBody(m)
+			b.WriteString("\t}\n")
+			b.WriteString("\tm.HandleFunc(\"")
+			b.WriteString(m.HTTPMethod)
+			b.WriteString(" ")
+			b.WriteString(m.Path)
+			b.WriteString("\", buildHandlerFunc(config, verifyAuth, ")
+			b.WriteString(accessPolicyName)
+			b.WriteString(", ")
+			b.WriteString(postAuthHandlerName)
+			b.WriteString(", ")
+			b.WriteString(compressionModeLiteral(m.Compression))
+			if m.Streaming {
+				b.WriteString(", true))\n")
+			} else {
+				b.WriteString(", false))\n")
+			}
+		}
+		b.WriteString("\treturn m\n")
+		b.WriteString("}\n")
+	}
+	if len(file.Services) == 1 {
+		writeHandlerInterface("ServerHandler", methods)
+		writeCreateMux("CreateMux", "ServerHandler", methods)
+	} else {
+		for i, svc := range services {
+			writeHandlerInterface(svc.HandlerName, svc.Methods)
+			writeCreateMux(svc.MuxName, svc.HandlerName, svc.Methods)
+			if i != len(services)-1 {
+				b.WriteString("\n")
+			}
 		}
 	}
-	b.WriteString("\treturn m\n")
-	b.WriteString("}\n")
 	return b.String(), nil
 }
 

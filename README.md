@@ -563,6 +563,7 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 </details>
 
 - To use the Go stubs, you just implement the generated handler interface and pass it to `CreateMux`.
+- For a proto file with one service, the Go server surface remains `ServerHandler` and `CreateMux`; for multiple services, cleanproto generates one `<ServiceName>Handler` interface and one `Create<ServiceName>Mux` function per service.
 - A minimal `main.go` can look like this:
 
 ```go

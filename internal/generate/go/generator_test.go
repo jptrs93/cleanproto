@@ -139,6 +139,12 @@ func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 			t.Fatalf("expected generated mux to contain %q, got:\n%s", check, mux)
 		}
 	}
+	if strings.Contains(mux, "ExampleServiceHandler") {
+		t.Fatalf("expected single-service mux to keep ServerHandler name, got:\n%s", mux)
+	}
+	if strings.Contains(mux, "CreateExampleServiceMux") {
+		t.Fatalf("expected single-service mux to keep CreateMux name, got:\n%s", mux)
+	}
 
 	utilSource := strings.ReplaceAll(muxUtilSource, "__PACKAGE__", "example")
 	if _, err := parser.ParseFile(token.NewFileSet(), "mux_util.gen.go", utilSource, parser.AllErrors); err != nil {
@@ -182,4 +188,132 @@ func TestBuildGoMuxFileDoesNotTypeAssertDefaultAuthContext(t *testing.T) {
 	if !strings.Contains(mux, "var authCtx AuthContext") {
 		t.Fatalf("expected default VerifyAuth stub to return zero auth context, got:\n%s", mux)
 	}
+}
+
+func TestBuildGoMuxFileSplitsMultipleServices(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{Name: "FooReply", FullName: "example.FooReply", Fields: []ir.Field{{Name: "value", Kind: ir.KindString}}},
+			{Name: "BarReply", FullName: "example.BarReply", Fields: []ir.Field{{Name: "value", Kind: ir.KindString}}},
+		},
+		Services: []ir.Service{
+			{
+				Name: "FooService",
+				Methods: []ir.Method{{
+					Name:           "GetFooV1",
+					InputFullName:  "cp.Empty",
+					OutputFullName: "example.FooReply",
+				}},
+			},
+			{
+				Name: "BarService",
+				Methods: []ir.Method{{
+					Name:           "GetBarV1",
+					InputFullName:  "cp.Empty",
+					OutputFullName: "example.BarReply",
+				}},
+			},
+		},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	mux, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoMuxFile: %v", err)
+	}
+
+	checks := []string{
+		"type FooServiceHandler interface",
+		"GetFooV1(context.Context) (*FooReply, error)",
+		"func CreateFooServiceMux(h FooServiceHandler, config *MuxConfig) *http.ServeMux",
+		"type BarServiceHandler interface",
+		"GetBarV1(context.Context) (*BarReply, error)",
+		"func CreateBarServiceMux(h BarServiceHandler, config *MuxConfig) *http.ServeMux",
+	}
+	for _, check := range checks {
+		if !strings.Contains(mux, check) {
+			t.Fatalf("expected generated mux to contain %q, got:\n%s", check, mux)
+		}
+	}
+	if strings.Contains(mux, "type ServerHandler interface") {
+		t.Fatalf("expected multi-service mux to avoid flattened ServerHandler, got:\n%s", mux)
+	}
+	if strings.Contains(mux, "func CreateMux(") {
+		t.Fatalf("expected multi-service mux to avoid flattened CreateMux, got:\n%s", mux)
+	}
+
+	fooInterface := generatedSection(t, mux, "type FooServiceHandler interface", "}\n\nfunc CreateFooServiceMux")
+	if strings.Contains(fooInterface, "GetBarV1") {
+		t.Fatalf("expected FooServiceHandler to only contain foo methods, got:\n%s", fooInterface)
+	}
+	barInterface := generatedSection(t, mux, "type BarServiceHandler interface", "}\n\nfunc CreateBarServiceMux")
+	if strings.Contains(barInterface, "GetFooV1") {
+		t.Fatalf("expected BarServiceHandler to only contain bar methods, got:\n%s", barInterface)
+	}
+	fooMux := generatedSection(t, mux, "func CreateFooServiceMux", "\n}\n\ntype BarServiceHandler interface")
+	if strings.Contains(fooMux, "GetBarV1") {
+		t.Fatalf("expected CreateFooServiceMux to only register foo methods, got:\n%s", fooMux)
+	}
+	barMux := generatedSection(t, mux, "func CreateBarServiceMux", "\n}")
+	if strings.Contains(barMux, "GetFooV1") {
+		t.Fatalf("expected CreateBarServiceMux to only register bar methods, got:\n%s", barMux)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "mux.gen.go", mux, parser.AllErrors); err != nil {
+		t.Fatalf("expected generated mux source to parse: %v\n%s", err, mux)
+	}
+}
+
+func TestBuildGoMuxFileErrorsOnServiceNameCollision(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{{
+			Name:     "Reply",
+			FullName: "example.Reply",
+			Fields:   []ir.Field{{Name: "value", Kind: ir.KindString}},
+		}},
+		Services: []ir.Service{
+			{
+				Name: "Foo_Bar",
+				Methods: []ir.Method{{
+					Name:           "GetFooV1",
+					InputFullName:  "cp.Empty",
+					OutputFullName: "example.Reply",
+				}},
+			},
+			{
+				Name: "FooBar",
+				Methods: []ir.Method{{
+					Name:           "GetBarV1",
+					InputFullName:  "cp.Empty",
+					OutputFullName: "example.Reply",
+				}},
+			},
+		},
+	}
+	msgIndex := map[string]ir.Message{"example.Reply": file.Messages[0]}
+
+	_, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "")
+	if err == nil {
+		t.Fatal("expected service name collision error")
+	}
+	if !strings.Contains(err.Error(), "duplicate generated service handler name: FooBarHandler") {
+		t.Fatalf("expected duplicate handler error, got: %v", err)
+	}
+}
+
+func generatedSection(t *testing.T, source string, start string, end string) string {
+	t.Helper()
+	startIdx := strings.Index(source, start)
+	if startIdx == -1 {
+		t.Fatalf("missing section start %q in:\n%s", start, source)
+	}
+	endIdx := strings.Index(source[startIdx:], end)
+	if endIdx == -1 {
+		t.Fatalf("missing section end %q after %q in:\n%s", end, start, source[startIdx:])
+	}
+	return source[startIdx : startIdx+endIdx+len(end)]
 }
