@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -152,6 +153,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			httpMethod, path, ok := deriveHTTPGo(m.Name)
 			if !ok {
 				continue
+			}
+			if m.URL != "" {
+				path = m.URL
 			}
 			in, ok := msgIndex[m.InputFullName]
 			if !ok {

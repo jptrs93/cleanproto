@@ -76,4 +76,5 @@ extend google.protobuf.MethodOptions {
   //     option (cp.compression) = COMPRESSION_MODE_NEVER;
   //   }
   CompressionMode compression = 50033;
+  string url = 50034;
 }

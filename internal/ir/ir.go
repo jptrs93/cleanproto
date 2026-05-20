@@ -20,6 +20,7 @@ type Method struct {
 	OutputFullName    string
 	GoCustom          bool
 	OperationID       string
+	URL               string
 	Audit             bool
 	IsStreamingClient bool
 	IsStreamingServer bool

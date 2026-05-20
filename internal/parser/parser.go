@@ -204,6 +204,10 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 			if err != nil {
 				return nil, err
 			}
+			url, err := urlFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
 			audit, err := auditFromMethodOptions(m)
 			if err != nil {
 				return nil, err
@@ -222,6 +226,7 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 				OutputFullName:    string(m.Output().FullName()),
 				GoCustom:          goCustom,
 				OperationID:       operationID,
+				URL:               url,
 				Audit:             audit,
 				IsStreamingClient: m.IsStreamingClient(),
 				IsStreamingServer: m.IsStreamingServer(),

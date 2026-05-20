@@ -462,6 +462,7 @@ func TestBuildGoMuxFileSplitsMultipleServices(t *testing.T) {
 			},
 		},
 	}
+
 	msgIndex := map[string]ir.Message{}
 	for _, msg := range file.Messages {
 		msgIndex[msg.FullName] = msg
@@ -510,6 +511,42 @@ func TestBuildGoMuxFileSplitsMultipleServices(t *testing.T) {
 	}
 	if _, err := parser.ParseFile(token.NewFileSet(), "mux.gen.go", mux, parser.AllErrors); err != nil {
 		t.Fatalf("expected generated mux source to parse: %v\n%s", err, mux)
+	}
+}
+
+func TestBuildGoMuxFileUsesURLOverride(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{{
+			Name:     "Reply",
+			FullName: "example.Reply",
+			Fields:   []ir.Field{{Name: "value", Kind: ir.KindString}},
+		}},
+		Services: []ir.Service{{
+			Name: "ExampleService",
+			Methods: []ir.Method{{
+				Name:           "GetReplyV1",
+				InputFullName:  "cp.Empty",
+				OutputFullName: "example.Reply",
+				URL:            "/v1/custom/reply",
+			}},
+		}},
+	}
+
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	mux, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoMuxFile: %v", err)
+	}
+	if !strings.Contains(mux, "m.HandleFunc(\"GET /v1/custom/reply\"") {
+		t.Fatalf("expected generated mux to use URL override, got:\n%s", mux)
+	}
+	if strings.Contains(mux, "GET /v1/reply") {
+		t.Fatalf("expected generated mux to avoid derived path, got:\n%s", mux)
 	}
 }
 

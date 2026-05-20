@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -138,6 +139,7 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	type capiMethod struct {
 		Name            string
 		Path            string
+		PathLiteral     string
 		HTTPMethod      string
 		InputType       string
 		OutputType      string
@@ -154,6 +156,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			httpMethod, path, ok := deriveHTTP(m.Name)
 			if !ok {
 				continue
+			}
+			if m.URL != "" {
+				path = m.URL
 			}
 			inType, ok := messageNameByFullName(msgIndex, m.InputFullName)
 			if !ok {
@@ -183,6 +188,7 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			methods = append(methods, capiMethod{
 				Name:            lowerFirst(normalizeJsMethodName(m.Name)),
 				Path:            path,
+				PathLiteral:     strconv.Quote(path),
 				HTTPMethod:      httpMethod,
 				InputType:       inType,
 				OutputType:      outType,
@@ -347,9 +353,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("    const self = this;\n")
 			b.WriteString("    return {\n")
 			b.WriteString("      [Symbol.asyncIterator]: async function* () {\n")
-			b.WriteString("        const response = await self.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("        const response = await self.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			if m.InputType == "Empty" {
 				b.WriteString("', signal: options.signal });\n")
@@ -382,9 +388,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("  async ")
 			b.WriteString(m.Name)
 			b.WriteString("() {\n")
-			b.WriteString("    const response = await this.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("    const response = await this.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("' });\n")
 		} else {
@@ -402,9 +408,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("  async ")
 			b.WriteString(m.Name)
 			b.WriteString("(payload) {\n")
-			b.WriteString("    const response = await this.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("    const response = await this.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("', body: encode")
 			b.WriteString(m.InputType)
