@@ -54,4 +54,5 @@ extend google.protobuf.MethodOptions {
   bool audit = 50032;
   AccessPolicy policy = 50030;
   CompressionMode compression = 50033;
+  string url = 50034;
 }

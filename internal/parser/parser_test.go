@@ -63,3 +63,40 @@ service DemoService {
 		t.Fatalf("expected never compression mode, got %d", methods[2].CompressionMode)
 	}
 }
+
+func TestParseURLFromMethodOptions(t *testing.T) {
+	const protoSource = `syntax = "proto3";
+
+package demo;
+
+import "options.proto";
+
+option go_package = "demo";
+
+service DemoService {
+	 rpc GetBooksV1(cp.Empty) returns (cp.Empty) {
+	   option (cp.url) = "/v1/library/books";
+	 }
+}
+`
+
+	dir := t.TempDir()
+	protoPath := filepath.Join(dir, "demo.proto")
+	if err := os.WriteFile(protoPath, []byte(protoSource), 0o644); err != nil {
+		t.Fatalf("write proto: %v", err)
+	}
+	optionsPath := filepath.Join(dir, "options.proto")
+	if err := os.WriteFile(optionsPath, []byte(optionsProtoSource), 0o644); err != nil {
+		t.Fatalf("write options proto: %v", err)
+	}
+
+	p := Parser{ImportPaths: []string{dir}}
+	files, err := p.Parse(context.Background(), []string{"demo.proto"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	methods := files[0].Services[0].Methods
+	if methods[0].URL != "/v1/library/books" {
+		t.Fatalf("expected URL override, got %q", methods[0].URL)
+	}
+}

@@ -155,3 +155,12 @@ var E_Compression = &protoimpl.ExtensionInfo{
 	Tag:           "varint,50033,opt,name=compression,enum=cp.CompressionMode",
 	Filename:      OptionsProtoPath,
 }
+
+var E_Url = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+	ExtensionType: (*string)(nil),
+	Field:         50034,
+	Name:          "cp.url",
+	Tag:           "bytes,50034,opt,name=url",
+	Filename:      OptionsProtoPath,
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -66,7 +67,6 @@ const jsStreamHelperSource = `async function* readLengthPrefixedFrames(body, dec
 
 `
 
-
 func (g Generator) Generate(files []ir.File, options generate.Options) ([]generate.OutputFile, error) {
 	tmpl, err := template.ParseFS(templates.FS, "js_file.tmpl")
 	if err != nil {
@@ -108,12 +108,12 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 
 func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, error) {
 	type capiMethod struct {
-		Name       string
-		Path       string
-		HTTPMethod string
-		InputType  string
-		OutputType string
-		Streaming  bool
+		Name        string
+		PathLiteral string
+		HTTPMethod  string
+		InputType   string
+		OutputType  string
+		Streaming   bool
 	}
 	methods := make([]capiMethod, 0)
 	decodeImports := map[string]struct{}{}
@@ -124,6 +124,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			httpMethod, path, ok := deriveHTTP(m.Name)
 			if !ok {
 				continue
+			}
+			if m.URL != "" {
+				path = m.URL
 			}
 			inType, ok := messageNameByFullName(msgIndex, m.InputFullName)
 			if !ok {
@@ -140,12 +143,12 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				decodeImports["decode"+outType] = struct{}{}
 			}
 			methods = append(methods, capiMethod{
-				Name:       lowerFirst(normalizeJsMethodName(m.Name)),
-				Path:       path,
-				HTTPMethod: httpMethod,
-				InputType:  inType,
-				OutputType: outType,
-				Streaming:  m.IsStreamingServer,
+				Name:        lowerFirst(normalizeJsMethodName(m.Name)),
+				PathLiteral: strconv.Quote(path),
+				HTTPMethod:  httpMethod,
+				InputType:   inType,
+				OutputType:  outType,
+				Streaming:   m.IsStreamingServer,
 			})
 			if m.IsStreamingServer {
 				hasStream = true
@@ -226,9 +229,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("    const self = this;\n")
 			b.WriteString("    return {\n")
 			b.WriteString("      [Symbol.asyncIterator]: async function* () {\n")
-			b.WriteString("        const response = await self.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("        const response = await self.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			if m.InputType == "Empty" {
 				b.WriteString("', signal: options.signal });\n")
@@ -261,9 +264,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("  async ")
 			b.WriteString(m.Name)
 			b.WriteString("() {\n")
-			b.WriteString("    const response = await this.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("    const response = await this.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("' });\n")
 		} else {
@@ -281,9 +284,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString("  async ")
 			b.WriteString(m.Name)
 			b.WriteString("(payload) {\n")
-			b.WriteString("    const response = await this.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("    const response = await this.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("', body: encode")
 			b.WriteString(m.InputType)

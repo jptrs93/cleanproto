@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -61,11 +62,11 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 
 func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, error) {
 	type capiMethod struct {
-		Name       string
-		Path       string
-		HTTPMethod string
-		InputType  string
-		OutputType string
+		Name        string
+		PathLiteral string
+		HTTPMethod  string
+		InputType   string
+		OutputType  string
 	}
 	methods := make([]capiMethod, 0)
 	decodeImports := map[string]struct{}{}
@@ -81,6 +82,9 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			if !ok {
 				continue
 			}
+			if m.URL != "" {
+				path = m.URL
+			}
 			inType, ok := messageNameByFullName(msgIndex, m.InputFullName)
 			if !ok {
 				return "", fmt.Errorf("unknown method input type: %s", m.InputFullName)
@@ -90,11 +94,11 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				return "", fmt.Errorf("unknown method output type: %s", m.OutputFullName)
 			}
 			cm := capiMethod{
-				Name:       lowerFirst(m.Name),
-				Path:       path,
-				HTTPMethod: httpMethod,
-				InputType:  inType,
-				OutputType: outType,
+				Name:        lowerFirst(m.Name),
+				PathLiteral: strconv.Quote(path),
+				HTTPMethod:  httpMethod,
+				InputType:   inType,
+				OutputType:  outType,
 			}
 			if inType != "Empty" {
 				encodeImports["encode"+inType] = struct{}{}
@@ -172,9 +176,9 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				b.WriteString(m.OutputType)
 				b.WriteString("> {\n")
 			}
-			b.WriteString("    const response = await this.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("    const response = await this.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("' });\n")
 		} else {
@@ -189,9 +193,9 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				b.WriteString(m.OutputType)
 				b.WriteString("> {\n")
 			}
-			b.WriteString("    const response = await this.#request('")
-			b.WriteString(m.Path)
-			b.WriteString("', { method: '")
+			b.WriteString("    const response = await this.#request(")
+			b.WriteString(m.PathLiteral)
+			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("', body: encode")
 			b.WriteString(m.InputType)

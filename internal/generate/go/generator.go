@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
@@ -145,6 +146,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			httpMethod, path, ok := deriveHTTPGo(m.Name)
 			if !ok {
 				continue
+			}
+			if m.URL != "" {
+				path = m.URL
 			}
 			in, ok := msgIndex[m.InputFullName]
 			if !ok {
@@ -579,11 +583,9 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 		b.WriteString(", w http.ResponseWriter, r *http.Request) {\n")
 		writeRouteHandlerBody(m)
 		b.WriteString("\t}\n")
-		b.WriteString("\tm.HandleFunc(\"")
-		b.WriteString(m.HTTPMethod)
-		b.WriteString(" ")
-		b.WriteString(m.Path)
-		b.WriteString("\", buildHandlerFunc(config, verifyAuth, ")
+		b.WriteString("\tm.HandleFunc(")
+		b.WriteString(strconv.Quote(m.HTTPMethod + " " + m.Path))
+		b.WriteString(", buildHandlerFunc(config, verifyAuth, ")
 		b.WriteString(accessPolicyName)
 		b.WriteString(", ")
 		b.WriteString(postAuthHandlerName)

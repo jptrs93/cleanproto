@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/jptrs93/cleanproto"
@@ -34,6 +35,7 @@ var E_GoCustom = cp.E_GoCustom
 var E_OperationId = cp.E_OperationId
 var E_Audit = cp.E_Audit
 var E_Compression = cp.E_Compression
+var E_Url = cp.E_Url
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
@@ -218,6 +220,25 @@ func operationIDFromMethodOptions(method protoreflect.MethodDescriptor) (string,
 	str, ok := val.(string)
 	if !ok || str == "" {
 		return "", nil
+	}
+	return str, nil
+}
+
+func urlFromMethodOptions(method protoreflect.MethodDescriptor) (string, error) {
+	opts, ok := method.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return "", nil
+	}
+	if !proto.HasExtension(opts, E_Url) {
+		return "", nil
+	}
+	val := proto.GetExtension(opts, E_Url)
+	str, ok := val.(string)
+	if !ok || str == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(str, "/") {
+		return "", fmt.Errorf("cp.url must start with /: %s", method.FullName())
 	}
 	return str, nil
 }
