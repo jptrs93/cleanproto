@@ -32,7 +32,7 @@ cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out
 Positional args: one or more `.proto` files to generate.
 
 > [!IMPORTANT]
-> Generated code relies on `google.golang.org/protobuf/encoding/protowire` for Go and `protobufjs/minimal` for JavaScript/TypeScript. You must add these dependencies to your project.
+> Go output relies on `google.golang.org/protobuf/encoding/protowire`, and JavaScript output on `protobufjs/minimal` — you must add these dependencies to your project. TypeScript output is self-contained: it emits a `runtime.ts` (a minimal protobuf reader/writer) alongside `model.ts` and has no external runtime dependency.
 
 ### Native type support
 
@@ -282,9 +282,8 @@ export function decodeAuditEvent(buffer) {
 <summary>Show TypeScript output</summary>
 
 ```ts
-import protobufjsm from 'protobufjs/minimal';
-import type { Reader, Writer } from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
+import { Reader, Writer } from './runtime';
+import type { Reader as PBReader, Writer as PBWriter } from './runtime';
 
 export interface AuditEvent {
   occurredAt: bigint;

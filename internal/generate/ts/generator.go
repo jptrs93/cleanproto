@@ -27,11 +27,13 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	}
 	msgIndex := indexMessages(files)
 	var outputs []generate.OutputFile
+	tsEmitted := false
 	for _, file := range files {
 		tsOut := options.TsOut
 		if tsOut == "" {
 			continue
 		}
+		tsEmitted = true
 		data, err := buildTSFileData(file, msgIndex)
 		if err != nil {
 			return nil, err
@@ -55,6 +57,12 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 				Content: []byte(capi),
 			})
 		}
+	}
+	if tsEmitted {
+		outputs = append(outputs, generate.OutputFile{
+			Path:    filepath.Join(options.TsOut, "runtime.ts"),
+			Content: []byte(templates.TSRuntimeSource),
+		})
 	}
 	return outputs, nil
 }
