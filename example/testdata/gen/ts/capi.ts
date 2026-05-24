@@ -3,6 +3,7 @@
 import {
   decodeBook,
   decodeLibrary,
+  encodeBook,
   encodeCheckoutBookReq,
   encodeGetBookReq,
 } from './model';
@@ -17,6 +18,77 @@ type HeaderProvider = () => Record<string, string>;
 type ErrorHandler = (response: Response) => Promise<never>;
 type RequestBody = BodyInit;
 
+async function* readLengthPrefixedFrames<T>(body: ReadableStream<Uint8Array>, decode: (buf: ArrayBuffer) => T): AsyncIterable<T> {
+  const reader = body.getReader();
+  let buf = new Uint8Array(0);
+  while (true) {
+    let len = 0;
+    let shift = 0;
+    let headerLen = 0;
+    let parsed = false;
+    for (let i = 0; i < buf.length && i < 10; i++) {
+      const byte = buf[i];
+      len |= (byte & 0x7f) << shift;
+      shift += 7;
+      if ((byte & 0x80) === 0) {
+        headerLen = i + 1;
+        parsed = true;
+        break;
+      }
+    }
+    if (!parsed) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buf.length === 0) return;
+        throw new Error('stream truncated mid-frame header');
+      }
+      const next = new Uint8Array(buf.length + value.length);
+      next.set(buf, 0);
+      next.set(value, buf.length);
+      buf = next;
+      continue;
+    }
+    while (buf.length < headerLen + len) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('stream truncated mid-frame body');
+      const next = new Uint8Array(buf.length + value.length);
+      next.set(buf, 0);
+      next.set(value, buf.length);
+      buf = next;
+    }
+    const payload = buf.slice(headerLen, headerLen + len);
+    yield decode(payload.buffer);
+    buf = buf.slice(headerLen + len);
+  }
+}
+
+function writeLengthPrefixedFrames<T>(asyncIterable: AsyncIterable<T>, encode: (item: T) => Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for await (const item of asyncIterable) {
+          const payload = encode(item);
+          const header = new Uint8Array(10);
+          let pos = 0;
+          let v = payload.length;
+          while (v > 0x7f) {
+            header[pos++] = (v & 0x7f) | 0x80;
+            v = Math.floor(v / 128);
+          }
+          header[pos++] = v & 0x7f;
+          const frame = new Uint8Array(pos + payload.length);
+          frame.set(header.subarray(0, pos), 0);
+          frame.set(payload, pos);
+          controller.enqueue(frame);
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
+}
+
 export class Capi {
   baseURL: string;
   headerProvider: HeaderProvider;
@@ -29,13 +101,15 @@ export class Capi {
     this.errorHandler = errorHandler == null ? async (response: Response) => { throw new Error(`HTTP ${response.status}`); } : errorHandler;
   }
 
-  async #request(path: string, { method = 'GET', body }: { method?: string; body?: RequestBody } = {}): Promise<Response> {
+  async #request(path: string, { method = 'GET', body, signal, contentType, duplex }: { method?: string; body?: RequestBody; signal?: AbortSignal; contentType?: string; duplex?: 'half' } = {}): Promise<Response> {
     const headers = this.headerProvider() || {};
     headers['Accept'] = 'application/x-protobuf';
     if (body !== undefined) {
-      headers['Content-Type'] = 'application/x-protobuf';
+      headers['Content-Type'] = contentType || 'application/x-protobuf';
     }
-    return fetch(`${this.baseURL}${path}`, { method, headers, body, credentials: 'include' });
+    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal, credentials: 'include' };
+    if (duplex) { init.duplex = duplex; }
+    return fetch(`${this.baseURL}${path}`, init);
   }
 
   async getLibraryV1(): Promise<Library> {
@@ -56,6 +130,36 @@ export class Capi {
 
   async postLibraryBook_CheckoutV1(payload: CheckoutBookReq): Promise<void> {
     const response = await this.#request('/library/book-checkout-v1', { method: 'POST', body: encodeCheckoutBookReq(payload) as BodyInit });
+    if (!response.ok) {
+      return this.errorHandler(response);
+    }
+    await response.arrayBuffer();
+  }
+
+  async postLibraryBook_BulkV1(stream: AsyncIterable<Book>, options: { signal?: AbortSignal } = {}): Promise<Library> {
+    const response = await this.#request('/library/book-bulk-v1', { method: 'POST', body: writeLengthPrefixedFrames(stream, encodeBook) as unknown as BodyInit, signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });
+    if (!response.ok) {
+      return this.errorHandler(response);
+    }
+    return decodeLibrary(await response.arrayBuffer());
+  }
+
+  postLibraryBook_LookupV1(stream: AsyncIterable<GetBookReq>, options: { signal?: AbortSignal } = {}): AsyncIterable<Book> {
+    const self = this;
+    return {
+      [Symbol.asyncIterator]: async function* () {
+        const response = await self.#request('/library/book-lookup-v1', { method: 'POST', body: writeLengthPrefixedFrames(stream, encodeGetBookReq) as unknown as BodyInit, signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });
+        if (!response.ok) {
+          return self.errorHandler(response);
+        }
+        if (!response.body) throw new Error('missing response body');
+        yield* readLengthPrefixedFrames(response.body, decodeBook);
+      },
+    };
+  }
+
+  async getLibraryEventsV1(): Promise<void> {
+    const response = await this.#request('/library/events/v1', { method: 'GET' });
     if (!response.ok) {
       return this.errorHandler(response);
     }

@@ -21,6 +21,7 @@ type Method struct {
 	GoCustom          bool
 	OperationID       string
 	Audit             bool
+	IsStreamingClient bool
 	IsStreamingServer bool
 	PolicyType        int32
 	PolicyScopes      []string

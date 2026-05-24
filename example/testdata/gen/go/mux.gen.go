@@ -4,6 +4,8 @@ package example
 
 import (
 	"context"
+	"fmt"
+	"iter"
 	"net/http"
 )
 
@@ -70,6 +72,9 @@ type ServerHandler interface {
 	GetLibraryV1(context.Context) (*Library, error)
 	GetLibraryBookV1(context.Context, *GetBookReq) (*Book, error)
 	PostLibraryBookCheckoutV1(context.Context, *CheckoutBookReq) error
+	PostLibraryBookBulkV1(context.Context, iter.Seq2[*Book, error]) (*Library, error)
+	PostLibraryBookLookupV1(context.Context, iter.Seq2[*GetBookReq, error]) iter.Seq2[*Book, error]
+	GetLibraryEventsV1(context.Context) error
 }
 
 func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
@@ -123,5 +128,89 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 		w.WriteHeader(http.StatusNoContent)
 	}
 	m.HandleFunc("POST /v1/library/book-checkout", buildHandlerFunc(config, verifyAuth, postLibraryBookCheckoutV1AccessPolicy, postAuthHandlerPostLibraryBookCheckoutV1, compressionModeAuto, false))
+	postLibraryBookBulkV1AccessPolicy := AccessPolicy{}
+	postAuthHandlerPostLibraryBookBulkV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+		sr := NewStreamReader(r.Body, config.MaxRequestBodySize)
+		seq := func(yield func(*Book, error) bool) {
+			for {
+				payload, ok, err := sr.Next()
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if !ok {
+					return
+				}
+				req, err := DecodeBook(payload)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if err := req.Validate(); err != nil {
+					yield(nil, err)
+					return
+				}
+				if !yield(req, nil) {
+					return
+				}
+			}
+		}
+		res, err := h.PostLibraryBookBulkV1(authCtx, seq)
+		Respond(authCtx, r, w, res, err)
+	}
+	m.HandleFunc("POST /v1/library/book-bulk", buildHandlerFunc(config, verifyAuth, postLibraryBookBulkV1AccessPolicy, postAuthHandlerPostLibraryBookBulkV1, compressionModeAuto, false))
+	postLibraryBookLookupV1AccessPolicy := AccessPolicy{}
+	postAuthHandlerPostLibraryBookLookupV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+		sr := NewStreamReader(r.Body, config.MaxRequestBodySize)
+		reqSeq := func(yield func(*GetBookReq, error) bool) {
+			for {
+				payload, ok, err := sr.Next()
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if !ok {
+					return
+				}
+				req, err := DecodeGetBookReq(payload)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if err := req.Validate(); err != nil {
+					yield(nil, err)
+					return
+				}
+				if !yield(req, nil) {
+					return
+				}
+			}
+		}
+		respSeq := h.PostLibraryBookLookupV1(authCtx, reqSeq)
+		stream := NewStreamWriter(w)
+		var streamErr error
+		for resp, yieldErr := range respSeq {
+			if yieldErr != nil {
+				streamErr = fmt.Errorf("streaming err: %w", yieldErr)
+				break
+			}
+			if werr := stream.Write(resp.Encode()); werr != nil {
+				streamErr = fmt.Errorf("writing stream resp: %w", werr)
+				break
+			}
+		}
+		stream.Finish(authCtx, streamErr)
+	}
+	m.HandleFunc("POST /v1/library/book-lookup", buildHandlerFunc(config, verifyAuth, postLibraryBookLookupV1AccessPolicy, postAuthHandlerPostLibraryBookLookupV1, compressionModeAuto, true))
+	getLibraryEventsV1AccessPolicy := AccessPolicy{}
+	postAuthHandlerGetLibraryEventsV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+		err := h.GetLibraryEventsV1(authCtx)
+		if err != nil {
+			HandleReqErr(authCtx, err, r, w)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+	m.HandleFunc("GET /v1/library/events", buildHandlerFunc(config, verifyAuth, getLibraryEventsV1AccessPolicy, postAuthHandlerGetLibraryEventsV1, compressionModeNever, false))
 	return m
 }

@@ -4,11 +4,11 @@ A minimal proto3 generator that generates clean, fast, readable code, supporting
 
 Currently supports Go, JavaScript, and TypeScript.
 
-| Language | Models | Client stubs | Server stubs |
-| --- | --- | --- | --- |
-| Go | Yes | No | Yes |
-| JavaScript | Yes | No | No |
-| TypeScript | Yes | No | No |
+| Language | Models | Client stubs | Server stubs | Server-streaming RPC | Client-streaming RPC | Bidi-streaming RPC |
+| --- | --- | --- | --- | --- | --- | --- |
+| Go | Yes | No | Yes | Yes (handler) | Yes (handler) | Yes (handler) |
+| JavaScript | Yes | Yes | No | Yes (client) | Yes (client) | Yes (client) |
+| TypeScript | Yes | Yes | No | No | Yes (client) | Yes (client) |
 
 ## Install
 ```
@@ -604,6 +604,40 @@ func main() {
 - Generated Go muxes can gzip responses through `MuxConfig.Compression`. `CompressionOptions.MinSize` defaults to disabled when omitted, and `CompressionOptions.Level` defaults to `gzip.DefaultCompression`.
 - `cp.compression` on an RPC overrides the global decision: `COMPRESSION_MODE_ALWAYS` forces gzip when the client accepts it, `COMPRESSION_MODE_NEVER` disables it, and the default `COMPRESSION_MODE_AUTO` uses the global `MinSize` threshold for unary RPCs.
 - Server-streaming RPCs only gzip when `cp.compression = COMPRESSION_MODE_ALWAYS`. Streaming `COMPRESSION_MODE_AUTO` behaves like disabled compression, `CompressionOptions.MinSize` is ignored once a compressed stream starts, and aborted compressed streams terminate without a final gzip trailer so clients can still detect a broken stream.
+
+### Client streaming
+
+Declare a client-streaming RPC with `stream` on the request: `rpc PostX(stream Req) returns (Resp);`. The client sends a sequence of uvarint-length-prefixed protobuf frames (`Content-Type: application/protobuf-stream`); the server reads frames lazily, then returns a single response after the request stream ends. Restrictions:
+
+- Input message cannot be `cp.Empty`.
+- HTTP verb must be `Post`/`Put`/`Patch`/`Delete` (no `Get`, since GET has no request body).
+- Incompatible with `cp.go_custom`.
+
+Generated surfaces:
+
+- Go handler: `PostX(ctx, iter.Seq2[*Req, error]) (*Resp, error)` (or `error` for `cp.Empty` response). Ranging over the iterator decodes the next frame; per-message `Validate()` runs automatically when generated. `MuxConfig.MaxRequestBodySize` is interpreted as a per-frame cap rather than a total body limit.
+- JS client: `await capi.postX(asyncIterableOfReq, { signal })`. The client uses `fetch` with a `ReadableStream` request body and `duplex: 'half'`, which requires HTTPS + HTTP/2 and a runtime with streaming uploads (Chrome/Edge, recent Safari/Firefox, Node 18+).
+- TS client: same shape, typed as `(stream: AsyncIterable<Req>, opts?: { signal?: AbortSignal }) => Promise<Resp>`.
+
+### Bidirectional streaming
+
+Declare a bidi RPC with `stream` on both sides: `rpc PostX(stream Req) returns (stream Resp);`. Both directions use uvarint-length-prefixed protobuf frames over a single full-duplex HTTP request. Restrictions:
+
+- Neither input nor output may be `cp.Empty`.
+- HTTP verb must be `Post`/`Put`/`Patch`/`Delete`.
+- Incompatible with `cp.go_custom`.
+
+Generated surfaces:
+
+- Go handler: `PostX(ctx, iter.Seq2[*Req, error]) iter.Seq2[*Resp, error]`. The request iterator is hot — yields are interleaved with the response iterator. Handler authors who want true bidi (rather than drain-then-respond) typically spawn a goroutine to range over the request iterator while the response iterator pulls from a channel; the codegen cannot enforce this shape.
+- JS/TS client: returns `AsyncIterable<Resp>` directly (not a `Promise`), so the caller can start iterating responses before the request stream has fully drained. Requires the same `duplex: 'half'` runtime support as client streaming.
+
+Deployment caveats:
+
+- **Reverse-proxy buffering will break bidi.** nginx defaults `proxy_request_buffering on` and `proxy_buffering on`; both must be disabled (or use a proxy that streams natively). Same applies to Cloud Run / API Gateway / App Engine — verify the deployment surface supports full-duplex streaming before relying on bidi.
+- **No late HTTP error codes.** Once the handler yields its first response frame, the HTTP status is committed to `200`. Subsequent request-decode or validation errors are logged and the connection closes mid-stream — they can't surface as `4xx`. If clean error reporting matters, model errors in the response message (e.g. a `oneof { Resp ok; ErrInfo err; }`).
+- **Browser bidi requires HTTPS + HTTP/2.** `duplex: 'half'` is not available over plain `http://` in browsers. Node 18+ undici supports it over both HTTP/1.1 and HTTP/2.
+- `MuxConfig.MaxRequestBodySize` is a per-frame cap (same as client streaming); there is no total-body cap on bidi streams.
 
 <details>
 <summary>Show JavaScript output</summary>

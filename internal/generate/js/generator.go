@@ -20,6 +20,35 @@ func (g Generator) Name() string {
 	return "js"
 }
 
+const jsClientStreamHelperSource = `function writeLengthPrefixedFrames(asyncIterable, encode) {
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        for await (const item of asyncIterable) {
+          const payload = encode(item);
+          const header = new Uint8Array(10);
+          let pos = 0;
+          let v = payload.length;
+          while (v > 0x7f) {
+            header[pos++] = (v & 0x7f) | 0x80;
+            v = Math.floor(v / 128);
+          }
+          header[pos++] = v & 0x7f;
+          const frame = new Uint8Array(pos + payload.length);
+          frame.set(header.subarray(0, pos), 0);
+          frame.set(payload, pos);
+          controller.enqueue(frame);
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
+}
+
+`
+
 const jsStreamHelperSource = `async function* readLengthPrefixedFrames(body, decode) {
   const reader = body.getReader();
   let buf = new Uint8Array(0);
@@ -66,7 +95,6 @@ const jsStreamHelperSource = `async function* readLengthPrefixedFrames(body, dec
 
 `
 
-
 func (g Generator) Generate(files []ir.File, options generate.Options) ([]generate.OutputFile, error) {
 	tmpl, err := template.ParseFS(templates.FS, "js_file.tmpl")
 	if err != nil {
@@ -108,17 +136,19 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 
 func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, error) {
 	type capiMethod struct {
-		Name       string
-		Path       string
-		HTTPMethod string
-		InputType  string
-		OutputType string
-		Streaming  bool
+		Name            string
+		Path            string
+		HTTPMethod      string
+		InputType       string
+		OutputType      string
+		Streaming       bool
+		ClientStreaming bool
 	}
 	methods := make([]capiMethod, 0)
 	decodeImports := map[string]struct{}{}
 	encodeImports := map[string]struct{}{}
 	hasStream := false
+	hasClientStream := false
 	for _, svc := range file.Services {
 		for _, m := range svc.Methods {
 			httpMethod, path, ok := deriveHTTP(m.Name)
@@ -139,16 +169,31 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			if outType != "Empty" {
 				decodeImports["decode"+outType] = struct{}{}
 			}
+			if m.IsStreamingClient {
+				if inType == "Empty" {
+					return "", fmt.Errorf("client-streaming RPC %s cannot have Empty input", m.Name)
+				}
+				if httpMethod == "GET" {
+					return "", fmt.Errorf("client-streaming RPC %s cannot use a Get* verb; use Post/Put/Patch/Delete", m.Name)
+				}
+			}
+			if m.IsStreamingServer && outType == "Empty" {
+				return "", fmt.Errorf("streaming RPC %s cannot have Empty output", m.Name)
+			}
 			methods = append(methods, capiMethod{
-				Name:       lowerFirst(normalizeJsMethodName(m.Name)),
-				Path:       path,
-				HTTPMethod: httpMethod,
-				InputType:  inType,
-				OutputType: outType,
-				Streaming:  m.IsStreamingServer,
+				Name:            lowerFirst(normalizeJsMethodName(m.Name)),
+				Path:            path,
+				HTTPMethod:      httpMethod,
+				InputType:       inType,
+				OutputType:      outType,
+				Streaming:       m.IsStreamingServer,
+				ClientStreaming: m.IsStreamingClient,
 			})
 			if m.IsStreamingServer {
 				hasStream = true
+			}
+			if m.IsStreamingClient {
+				hasClientStream = true
 			}
 		}
 	}
@@ -179,6 +224,9 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	if hasStream {
 		b.WriteString(jsStreamHelperSource)
 	}
+	if hasClientStream {
+		b.WriteString(jsClientStreamHelperSource)
+	}
 	b.WriteString("export class Capi {\n")
 	b.WriteString("  /**\n")
 	b.WriteString("   * @param {string} [baseURL='']\n")
@@ -192,18 +240,91 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	b.WriteString("  }\n\n")
 	b.WriteString("  /**\n")
 	b.WriteString("   * @param {string} path\n")
-	b.WriteString("   * @param {{ method?: string, body?: RequestBody, signal?: AbortSignal }} [options={}]\n")
+	b.WriteString("   * @param {{ method?: string, body?: RequestBody, signal?: AbortSignal, contentType?: string, duplex?: 'half' }} [options={}]\n")
 	b.WriteString("   * @returns {Promise<Response>}\n")
 	b.WriteString("   */\n")
-	b.WriteString("  async #request(path, { method = 'GET', body, signal } = {}) {\n")
+	b.WriteString("  async #request(path, { method = 'GET', body, signal, contentType, duplex } = {}) {\n")
 	b.WriteString("    const headers = this.headerProvider() || {};\n")
 	b.WriteString("    headers['Accept'] = 'application/x-protobuf';\n")
 	b.WriteString("    if (body !== undefined) {\n")
-	b.WriteString("      headers['Content-Type'] = 'application/x-protobuf';\n")
+	b.WriteString("      headers['Content-Type'] = contentType || 'application/x-protobuf';\n")
 	b.WriteString("    }\n")
-	b.WriteString("    return fetch(`${this.baseURL}${path}`, { method, headers, body, signal, credentials: 'include' });\n")
+	b.WriteString("    const init = { method, headers, body, signal, credentials: 'include' };\n")
+	b.WriteString("    if (duplex) { init.duplex = duplex; }\n")
+	b.WriteString("    return fetch(`${this.baseURL}${path}`, init);\n")
 	b.WriteString("  }\n\n")
 	for _, m := range methods {
+		if m.ClientStreaming && m.Streaming {
+			b.WriteString("  /**\n")
+			b.WriteString("   * @param {AsyncIterable<")
+			b.WriteString(m.InputType)
+			b.WriteString(">} stream\n")
+			b.WriteString("   * @param {{ signal?: AbortSignal }} [options={}]\n")
+			b.WriteString("   * @returns {AsyncIterable<")
+			b.WriteString(m.OutputType)
+			b.WriteString(">}\n")
+			b.WriteString("   */\n")
+			b.WriteString("  ")
+			b.WriteString(m.Name)
+			b.WriteString("(stream, options = {}) {\n")
+			b.WriteString("    const self = this;\n")
+			b.WriteString("    return {\n")
+			b.WriteString("      [Symbol.asyncIterator]: async function* () {\n")
+			b.WriteString("        const response = await self.#request('")
+			b.WriteString(m.Path)
+			b.WriteString("', { method: '")
+			b.WriteString(m.HTTPMethod)
+			b.WriteString("', body: writeLengthPrefixedFrames(stream, encode")
+			b.WriteString(m.InputType)
+			b.WriteString("), signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });\n")
+			b.WriteString("        if (!response.ok) {\n")
+			b.WriteString("          return self.errorHandler(response);\n")
+			b.WriteString("        }\n")
+			b.WriteString("        yield* readLengthPrefixedFrames(response.body, decode")
+			b.WriteString(m.OutputType)
+			b.WriteString(");\n")
+			b.WriteString("      },\n")
+			b.WriteString("    };\n")
+			b.WriteString("  }\n\n")
+			continue
+		}
+		if m.ClientStreaming {
+			b.WriteString("  /**\n")
+			b.WriteString("   * @param {AsyncIterable<")
+			b.WriteString(m.InputType)
+			b.WriteString(">} stream\n")
+			b.WriteString("   * @param {{ signal?: AbortSignal }} [options={}]\n")
+			b.WriteString("   * @returns {Promise<")
+			if m.OutputType == "Empty" {
+				b.WriteString("void")
+			} else {
+				b.WriteString(m.OutputType)
+			}
+			b.WriteString(">}\n")
+			b.WriteString("   */\n")
+			b.WriteString("  async ")
+			b.WriteString(m.Name)
+			b.WriteString("(stream, options = {}) {\n")
+			b.WriteString("    const response = await this.#request('")
+			b.WriteString(m.Path)
+			b.WriteString("', { method: '")
+			b.WriteString(m.HTTPMethod)
+			b.WriteString("', body: writeLengthPrefixedFrames(stream, encode")
+			b.WriteString(m.InputType)
+			b.WriteString("), signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });\n")
+			b.WriteString("    if (!response.ok) {\n")
+			b.WriteString("      return this.errorHandler(response);\n")
+			b.WriteString("    }\n")
+			if m.OutputType == "Empty" {
+				b.WriteString("    await response.arrayBuffer();\n")
+			} else {
+				b.WriteString("    return decode")
+				b.WriteString(m.OutputType)
+				b.WriteString("(await response.arrayBuffer());\n")
+			}
+			b.WriteString("  }\n\n")
+			continue
+		}
 		if m.Streaming {
 			b.WriteString("  /**\n")
 			if m.InputType != "Empty" {

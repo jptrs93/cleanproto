@@ -3,6 +3,7 @@
 import {
   decodeBook,
   decodeLibrary,
+  encodeBook,
   encodeCheckoutBookReq,
   encodeGetBookReq,
 } from './model.js';
@@ -10,6 +11,77 @@ import {
 /** @typedef {() => Object.<string, string>} HeaderProvider */
 /** @typedef {(response: Response) => Promise<never>} ErrorHandler */
 /** @typedef {BodyInit|Uint8Array} RequestBody */
+
+async function* readLengthPrefixedFrames(body, decode) {
+  const reader = body.getReader();
+  let buf = new Uint8Array(0);
+  while (true) {
+    let len = 0;
+    let shift = 0;
+    let headerLen = 0;
+    let parsed = false;
+    for (let i = 0; i < buf.length && i < 10; i++) {
+      const byte = buf[i];
+      len |= (byte & 0x7f) << shift;
+      shift += 7;
+      if ((byte & 0x80) === 0) {
+        headerLen = i + 1;
+        parsed = true;
+        break;
+      }
+    }
+    if (!parsed) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buf.length === 0) return;
+        throw new Error('stream truncated mid-frame header');
+      }
+      const next = new Uint8Array(buf.length + value.length);
+      next.set(buf, 0);
+      next.set(value, buf.length);
+      buf = next;
+      continue;
+    }
+    while (buf.length < headerLen + len) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('stream truncated mid-frame body');
+      const next = new Uint8Array(buf.length + value.length);
+      next.set(buf, 0);
+      next.set(value, buf.length);
+      buf = next;
+    }
+    const payload = buf.slice(headerLen, headerLen + len);
+    yield decode(payload.buffer);
+    buf = buf.slice(headerLen + len);
+  }
+}
+
+function writeLengthPrefixedFrames(asyncIterable, encode) {
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        for await (const item of asyncIterable) {
+          const payload = encode(item);
+          const header = new Uint8Array(10);
+          let pos = 0;
+          let v = payload.length;
+          while (v > 0x7f) {
+            header[pos++] = (v & 0x7f) | 0x80;
+            v = Math.floor(v / 128);
+          }
+          header[pos++] = v & 0x7f;
+          const frame = new Uint8Array(pos + payload.length);
+          frame.set(header.subarray(0, pos), 0);
+          frame.set(payload, pos);
+          controller.enqueue(frame);
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
+}
 
 export class Capi {
   /**
@@ -25,23 +97,25 @@ export class Capi {
 
   /**
    * @param {string} path
-   * @param {{ method?: string, body?: RequestBody, signal?: AbortSignal }} [options={}]
+   * @param {{ method?: string, body?: RequestBody, signal?: AbortSignal, contentType?: string, duplex?: 'half' }} [options={}]
    * @returns {Promise<Response>}
    */
-  async #request(path, { method = 'GET', body, signal } = {}) {
+  async #request(path, { method = 'GET', body, signal, contentType, duplex } = {}) {
     const headers = this.headerProvider() || {};
     headers['Accept'] = 'application/x-protobuf';
     if (body !== undefined) {
-      headers['Content-Type'] = 'application/x-protobuf';
+      headers['Content-Type'] = contentType || 'application/x-protobuf';
     }
-    return fetch(`${this.baseURL}${path}`, { method, headers, body, signal, credentials: 'include' });
+    const init = { method, headers, body, signal, credentials: 'include' };
+    if (duplex) { init.duplex = duplex; }
+    return fetch(`${this.baseURL}${path}`, init);
   }
 
   /**
    * @returns {Promise<Library>}
    */
   async getLibraryV1() {
-    const response = await this.#request('/library/v1', { method: 'GET' });
+    const response = await this.#request('/v1/library', { method: 'GET' });
     if (!response.ok) {
       return this.errorHandler(response);
     }
@@ -53,7 +127,7 @@ export class Capi {
    * @returns {Promise<Book>}
    */
   async getLibraryBookV1(payload) {
-    const response = await this.#request('/library/book/v1', { method: 'GET', body: encodeGetBookReq(payload) });
+    const response = await this.#request('/v1/library/book', { method: 'GET', body: encodeGetBookReq(payload) });
     if (!response.ok) {
       return this.errorHandler(response);
     }
@@ -64,8 +138,50 @@ export class Capi {
    * @param {CheckoutBookReq} payload
    * @returns {Promise<void>}
    */
-  async postLibraryBook_CheckoutV1(payload) {
-    const response = await this.#request('/library/book-checkout-v1', { method: 'POST', body: encodeCheckoutBookReq(payload) });
+  async postLibraryBookCheckoutV1(payload) {
+    const response = await this.#request('/v1/library/book-checkout', { method: 'POST', body: encodeCheckoutBookReq(payload) });
+    if (!response.ok) {
+      return this.errorHandler(response);
+    }
+    await response.arrayBuffer();
+  }
+
+  /**
+   * @param {AsyncIterable<Book>} stream
+   * @param {{ signal?: AbortSignal }} [options={}]
+   * @returns {Promise<Library>}
+   */
+  async postLibraryBookBulkV1(stream, options = {}) {
+    const response = await this.#request('/v1/library/book-bulk', { method: 'POST', body: writeLengthPrefixedFrames(stream, encodeBook), signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });
+    if (!response.ok) {
+      return this.errorHandler(response);
+    }
+    return decodeLibrary(await response.arrayBuffer());
+  }
+
+  /**
+   * @param {AsyncIterable<GetBookReq>} stream
+   * @param {{ signal?: AbortSignal }} [options={}]
+   * @returns {AsyncIterable<Book>}
+   */
+  postLibraryBookLookupV1(stream, options = {}) {
+    const self = this;
+    return {
+      [Symbol.asyncIterator]: async function* () {
+        const response = await self.#request('/v1/library/book-lookup', { method: 'POST', body: writeLengthPrefixedFrames(stream, encodeGetBookReq), signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });
+        if (!response.ok) {
+          return self.errorHandler(response);
+        }
+        yield* readLengthPrefixedFrames(response.body, decodeBook);
+      },
+    };
+  }
+
+  /**
+   * @returns {Promise<void>}
+   */
+  async getLibraryEventsV1() {
+    const response = await this.#request('/v1/library/events', { method: 'GET' });
     if (!response.ok) {
       return this.errorHandler(response);
     }

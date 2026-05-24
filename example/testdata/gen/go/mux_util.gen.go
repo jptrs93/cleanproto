@@ -3,6 +3,7 @@
 package example
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -95,6 +96,49 @@ func decodeWithMaxBodySize[T any](r *http.Request, maxRequestBodySize int, decod
 		return nil, ApiErr{DisplayErr: "Request body too large", InternalErr: "request body exceeds max size", Code: http.StatusRequestEntityTooLarge}
 	}
 	return decode(b)
+}
+
+// StreamReader reads uvarint length-prefixed protobuf frames from r. It is used
+// by generated client-streaming handlers to lazily decode request frames.
+type StreamReader struct {
+	r            *bufio.Reader
+	maxFrameSize int
+}
+
+// NewStreamReader wraps r with a buffered reader for length-prefixed frames.
+// If maxFrameSize > 0, frames whose payload exceeds it are rejected with an
+// ApiErr carrying http.StatusRequestEntityTooLarge.
+func NewStreamReader(r io.Reader, maxFrameSize int) *StreamReader {
+	return &StreamReader{r: bufio.NewReader(r), maxFrameSize: maxFrameSize}
+}
+
+// Next returns the payload bytes of the next frame. At end-of-stream returns
+// (nil, false, nil). Framing or size errors return (nil, false, err).
+func (s *StreamReader) Next() ([]byte, bool, error) {
+	size, err := binary.ReadUvarint(s.r)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, false, nil
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, false, fmt.Errorf("stream truncated mid-frame header: %w", err)
+		}
+		return nil, false, err
+	}
+	if s.maxFrameSize > 0 && size > uint64(s.maxFrameSize) {
+		return nil, false, ApiErr{DisplayErr: "Request frame too large", InternalErr: "request frame exceeds max size", Code: http.StatusRequestEntityTooLarge}
+	}
+	if size == 0 {
+		return nil, true, nil
+	}
+	payload := make([]byte, size)
+	if _, err := io.ReadFull(s.r, payload); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, false, fmt.Errorf("stream truncated mid-frame body: %w", err)
+		}
+		return nil, false, err
+	}
+	return payload, true, nil
 }
 
 func WriteStreamFrame(w io.Writer, payload []byte) error {

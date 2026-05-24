@@ -196,9 +196,6 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 		methods := make([]ir.Method, 0, svc.Methods().Len())
 		for j := 0; j < svc.Methods().Len(); j++ {
 			m := svc.Methods().Get(j)
-			if m.IsStreamingClient() {
-				return nil, fmt.Errorf("client streaming is not supported: %s", m.FullName())
-			}
 			goCustom, err := goCustomFromMethodOptions(m)
 			if err != nil {
 				return nil, err
@@ -226,6 +223,7 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 				GoCustom:          goCustom,
 				OperationID:       operationID,
 				Audit:             audit,
+				IsStreamingClient: m.IsStreamingClient(),
 				IsStreamingServer: m.IsStreamingServer(),
 				PolicyType:        policyType,
 				PolicyScopes:      policyScopes,

@@ -155,6 +155,252 @@ func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 	}
 }
 
+func TestBuildGoMuxFileEmitsClientStreamingHandler(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{Name: "Book", FullName: "example.Book", Fields: []ir.Field{{Name: "id", Kind: ir.KindString}}},
+			{Name: "Library", FullName: "example.Library", Fields: []ir.Field{{Name: "name", Kind: ir.KindString}}},
+		},
+		Services: []ir.Service{{
+			Name: "LibraryService",
+			Methods: []ir.Method{
+				{
+					Name:              "PostLibraryBook_BulkV1",
+					InputFullName:     "example.Book",
+					OutputFullName:    "example.Library",
+					IsStreamingClient: true,
+				},
+			},
+		}},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	mux, err := buildGoMuxFile(file, msgIndex, map[string]bool{"example.Book": true}, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoMuxFile: %v", err)
+	}
+
+	checks := []string{
+		"PostLibraryBookBulkV1(context.Context, iter.Seq2[*Book, error]) (*Library, error)",
+		"sr := NewStreamReader(r.Body, config.MaxRequestBodySize)",
+		"seq := func(yield func(*Book, error) bool) {",
+		"req, err := DecodeBook(payload)",
+		"if err := req.Validate(); err != nil {",
+		"res, err := h.PostLibraryBookBulkV1(authCtx, seq)",
+		"Respond(authCtx, r, w, res, err)",
+		"m.HandleFunc(\"POST /v1/library/book-bulk\"",
+	}
+	for _, check := range checks {
+		if !strings.Contains(mux, check) {
+			t.Fatalf("expected generated mux to contain %q, got:\n%s", check, mux)
+		}
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "mux.gen.go", mux, parser.AllErrors); err != nil {
+		t.Fatalf("expected generated mux source to parse: %v\n%s", err, mux)
+	}
+}
+
+func TestBuildGoMuxFileRejectsClientStreamingMisuse(t *testing.T) {
+	base := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{Name: "Book", FullName: "example.Book"},
+			{Name: "Library", FullName: "example.Library"},
+		},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range base.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	cases := []struct {
+		name    string
+		method  ir.Method
+		wantSub string
+	}{
+		{
+			name: "EmptyInput",
+			method: ir.Method{
+				Name:              "PostThingV1",
+				InputFullName:     "cp.Empty",
+				OutputFullName:    "example.Library",
+				IsStreamingClient: true,
+			},
+			wantSub: "cannot have Empty input",
+		},
+		{
+			name: "GetVerb",
+			method: ir.Method{
+				Name:              "GetThingV1",
+				InputFullName:     "example.Book",
+				OutputFullName:    "example.Library",
+				IsStreamingClient: true,
+			},
+			wantSub: "cannot use a Get* verb",
+		},
+		{
+			name: "GoCustom",
+			method: ir.Method{
+				Name:              "PostThingV1",
+				InputFullName:     "example.Book",
+				OutputFullName:    "example.Library",
+				IsStreamingClient: true,
+				GoCustom:          true,
+			},
+			wantSub: "cannot also use cp.go_custom",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := base
+			f.Services = []ir.Service{{Name: "S", Methods: []ir.Method{tc.method}}}
+			_, err := buildGoMuxFile(f, msgIndex, nil, f.GoPackage, "")
+			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestBuildGoMuxFileEmitsBidiStreamingHandler(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{Name: "GetBookReq", FullName: "example.GetBookReq", Fields: []ir.Field{{Name: "id", Kind: ir.KindString}}},
+			{Name: "Book", FullName: "example.Book", Fields: []ir.Field{{Name: "id", Kind: ir.KindString}}},
+		},
+		Services: []ir.Service{{
+			Name: "LibraryService",
+			Methods: []ir.Method{
+				{
+					Name:              "PostLibraryBook_LookupV1",
+					InputFullName:     "example.GetBookReq",
+					OutputFullName:    "example.Book",
+					IsStreamingClient: true,
+					IsStreamingServer: true,
+				},
+			},
+		}},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	mux, err := buildGoMuxFile(file, msgIndex, map[string]bool{"example.GetBookReq": true}, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoMuxFile: %v", err)
+	}
+
+	checks := []string{
+		"PostLibraryBookLookupV1(context.Context, iter.Seq2[*GetBookReq, error]) iter.Seq2[*Book, error]",
+		"sr := NewStreamReader(r.Body, config.MaxRequestBodySize)",
+		"reqSeq := func(yield func(*GetBookReq, error) bool) {",
+		"req, err := DecodeGetBookReq(payload)",
+		"if err := req.Validate(); err != nil {",
+		"respSeq := h.PostLibraryBookLookupV1(authCtx, reqSeq)",
+		"stream := NewStreamWriter(w)",
+		"for resp, yieldErr := range respSeq {",
+		"stream.Write(resp.Encode())",
+		"stream.Finish(authCtx, streamErr)",
+		"m.HandleFunc(\"POST /v1/library/book-lookup\"",
+		", true))",
+	}
+	for _, check := range checks {
+		if !strings.Contains(mux, check) {
+			t.Fatalf("expected generated mux to contain %q, got:\n%s", check, mux)
+		}
+	}
+	if strings.Contains(mux, "decodeWithMaxBodySize(r, config.MaxRequestBodySize, DecodeGetBookReq)") {
+		t.Fatalf("bidi handler must not unary-decode the request body, got:\n%s", mux)
+	}
+	if strings.Contains(mux, "Respond(authCtx, r, w,") {
+		t.Fatalf("bidi handler must not call Respond, got:\n%s", mux)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "mux.gen.go", mux, parser.AllErrors); err != nil {
+		t.Fatalf("expected generated mux source to parse: %v\n%s", err, mux)
+	}
+}
+
+func TestBuildGoMuxFileRejectsBidiMisuse(t *testing.T) {
+	base := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{Name: "Book", FullName: "example.Book"},
+		},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range base.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	cases := []struct {
+		name    string
+		method  ir.Method
+		wantSub string
+	}{
+		{
+			name: "EmptyInput",
+			method: ir.Method{
+				Name:              "PostThingV1",
+				InputFullName:     "cp.Empty",
+				OutputFullName:    "example.Book",
+				IsStreamingClient: true,
+				IsStreamingServer: true,
+			},
+			wantSub: "cannot have Empty input",
+		},
+		{
+			name: "EmptyOutput",
+			method: ir.Method{
+				Name:              "PostThingV1",
+				InputFullName:     "example.Book",
+				OutputFullName:    "cp.Empty",
+				IsStreamingClient: true,
+				IsStreamingServer: true,
+			},
+			wantSub: "cannot have Empty output",
+		},
+		{
+			name: "GetVerb",
+			method: ir.Method{
+				Name:              "GetThingV1",
+				InputFullName:     "example.Book",
+				OutputFullName:    "example.Book",
+				IsStreamingClient: true,
+				IsStreamingServer: true,
+			},
+			wantSub: "cannot use a Get* verb",
+		},
+		{
+			name: "GoCustom",
+			method: ir.Method{
+				Name:              "PostThingV1",
+				InputFullName:     "example.Book",
+				OutputFullName:    "example.Book",
+				IsStreamingClient: true,
+				IsStreamingServer: true,
+				GoCustom:          true,
+			},
+			wantSub: "cannot also use cp.go_custom",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := base
+			f.Services = []ir.Service{{Name: "S", Methods: []ir.Method{tc.method}}}
+			_, err := buildGoMuxFile(f, msgIndex, nil, f.GoPackage, "")
+			if err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected error containing %q, got %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
 func TestBuildGoMuxFileDoesNotTypeAssertDefaultAuthContext(t *testing.T) {
 	file := ir.File{
 		GoPackage: "example",

@@ -54,6 +54,12 @@ service LibraryService {
   rpc GetLibraryV1(cp.Empty) returns (Library);
   rpc GetLibraryBookV1(GetBookReq) returns (Book);
   rpc PostLibraryBook_CheckoutV1(CheckoutBookReq) returns (cp.Empty);
+  // Bulk-add books from a client-streamed sequence; the server replies
+  // with the resulting library once the request stream ends.
+  rpc PostLibraryBook_BulkV1(stream Book) returns (Library);
+  // Bidirectional: client streams query books, server streams matching
+  // books as they're found. Used for live "as-you-type" lookups.
+  rpc PostLibraryBook_LookupV1(stream GetBookReq) returns (stream Book);
   // Hijacked into a WebSocket upgrade by the handler; gzip would
   // corrupt the upgraded connection, so disable response compression
   // regardless of the mux-level config.

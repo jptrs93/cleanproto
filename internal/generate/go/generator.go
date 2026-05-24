@@ -130,6 +130,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 		OutputAudit      bool
 		OperationID      string
 		Streaming        bool
+		ClientStreaming  bool
 		NoAuth           bool
 		Scopes           []string
 		PolicyType       int32
@@ -177,6 +178,17 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 					return "", fmt.Errorf("streaming RPC %s cannot also use cp.go_custom", m.Name)
 				}
 			}
+			if m.IsStreamingClient {
+				if in.Name == "Empty" || strings.HasSuffix(m.InputFullName, ".Empty") {
+					return "", fmt.Errorf("client-streaming RPC %s cannot have Empty input", m.Name)
+				}
+				if m.GoCustom {
+					return "", fmt.Errorf("client-streaming RPC %s cannot also use cp.go_custom", m.Name)
+				}
+				if httpMethod == "GET" {
+					return "", fmt.Errorf("client-streaming RPC %s cannot use a Get* verb; use Post/Put/Patch/Delete", m.Name)
+				}
+			}
 			method := muxMethod{
 				Name:             m.Name,
 				Handler:          normalizeGoMethodName(m.Name),
@@ -192,6 +204,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 				OutputAudit:      auditNeeds[m.OutputFullName],
 				OperationID:      m.OperationID,
 				Streaming:        m.IsStreamingServer,
+				ClientStreaming:  m.IsStreamingClient,
 				NoAuth:           m.PolicyType == 1,
 				Scopes:           append([]string(nil), m.PolicyScopes...),
 				PolicyType:       m.PolicyType,
@@ -200,7 +213,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			}
 			methods = append(methods, method)
 			svcMethods = append(svcMethods, method)
-			if m.IsStreamingServer {
+			if m.IsStreamingServer || m.IsStreamingClient {
 				hasStream = true
 			}
 		}
@@ -350,6 +363,71 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString("\t\t\t}\n")
 			return
 		}
+		if method.Streaming && method.ClientStreaming {
+			b.WriteString("\t\t\tsr := NewStreamReader(r.Body, config.MaxRequestBodySize)\n")
+			b.WriteString("\t\t\treqSeq := func(yield func(*")
+			b.WriteString(method.Input)
+			b.WriteString(", error) bool) {\n")
+			b.WriteString("\t\t\t\tfor {\n")
+			b.WriteString("\t\t\t\t\tpayload, ok, err := sr.Next()\n")
+			b.WriteString("\t\t\t\t\tif err != nil {\n")
+			b.WriteString("\t\t\t\t\t\tyield(nil, err)\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t\tif !ok {\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t\treq, err := Decode")
+			b.WriteString(method.Input)
+			b.WriteString("(payload)\n")
+			b.WriteString("\t\t\t\t\tif err != nil {\n")
+			b.WriteString("\t\t\t\t\t\tyield(nil, err)\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			if method.InputValidatable {
+				b.WriteString("\t\t\t\t\tif err := req.Validate(); err != nil {\n")
+				b.WriteString("\t\t\t\t\t\tyield(nil, err)\n")
+				b.WriteString("\t\t\t\t\t\treturn\n")
+				b.WriteString("\t\t\t\t\t}\n")
+			}
+			b.WriteString("\t\t\t\t\tif !yield(req, nil) {\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t}\n")
+			b.WriteString("\t\t\t}\n")
+			b.WriteString("\t\t\trespSeq := h.")
+			b.WriteString(method.Handler)
+			b.WriteString("(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", reqSeq)\n")
+			b.WriteString("\t\t\tstream := NewStreamWriter(w)\n")
+			b.WriteString("\t\t\tvar streamErr error\n")
+			b.WriteString("\t\t\tfor resp, yieldErr := range respSeq {\n")
+			b.WriteString("\t\t\t\tif yieldErr != nil {\n")
+			b.WriteString("\t\t\t\t\tstreamErr = fmt.Errorf(\"streaming err: %w\", yieldErr)\n")
+			b.WriteString("\t\t\t\t\tbreak\n")
+			b.WriteString("\t\t\t\t}\n")
+			b.WriteString("\t\t\t\tif werr := stream.Write(resp.Encode()); werr != nil {\n")
+			b.WriteString("\t\t\t\t\tstreamErr = fmt.Errorf(\"writing stream resp: %w\", werr)\n")
+			b.WriteString("\t\t\t\t\tbreak\n")
+			b.WriteString("\t\t\t\t}\n")
+			b.WriteString("\t\t\t}\n")
+			if method.Audit {
+				opID := method.OperationID
+				if opID == "" {
+					opID = method.Name
+				}
+				b.WriteString("\t\t\taudit(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", ")
+				b.WriteString(fmt.Sprintf("%q", opID))
+				b.WriteString(", streamErr, nil, nil)\n")
+			}
+			b.WriteString("\t\t\tstream.Finish(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", streamErr)\n")
+			return
+		}
 		if method.Streaming {
 			if !method.InputEmpty {
 				b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, Decode")
@@ -416,6 +494,87 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString("\t\t\tstream.Finish(")
 			b.WriteString(handlerCtxName)
 			b.WriteString(", streamErr)\n")
+			return
+		}
+		if method.ClientStreaming {
+			b.WriteString("\t\t\tsr := NewStreamReader(r.Body, config.MaxRequestBodySize)\n")
+			b.WriteString("\t\t\tseq := func(yield func(*")
+			b.WriteString(method.Input)
+			b.WriteString(", error) bool) {\n")
+			b.WriteString("\t\t\t\tfor {\n")
+			b.WriteString("\t\t\t\t\tpayload, ok, err := sr.Next()\n")
+			b.WriteString("\t\t\t\t\tif err != nil {\n")
+			b.WriteString("\t\t\t\t\t\tyield(nil, err)\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t\tif !ok {\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t\treq, err := Decode")
+			b.WriteString(method.Input)
+			b.WriteString("(payload)\n")
+			b.WriteString("\t\t\t\t\tif err != nil {\n")
+			b.WriteString("\t\t\t\t\t\tyield(nil, err)\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			if method.InputValidatable {
+				b.WriteString("\t\t\t\t\tif err := req.Validate(); err != nil {\n")
+				b.WriteString("\t\t\t\t\t\tyield(nil, err)\n")
+				b.WriteString("\t\t\t\t\t\treturn\n")
+				b.WriteString("\t\t\t\t\t}\n")
+			}
+			b.WriteString("\t\t\t\t\tif !yield(req, nil) {\n")
+			b.WriteString("\t\t\t\t\t\treturn\n")
+			b.WriteString("\t\t\t\t\t}\n")
+			b.WriteString("\t\t\t\t}\n")
+			b.WriteString("\t\t\t}\n")
+			writeAudit := func(errExpr, respExpr string) {
+				if !method.Audit {
+					return
+				}
+				opID := method.OperationID
+				if opID == "" {
+					opID = method.Name
+				}
+				b.WriteString("\t\t\taudit(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", ")
+				b.WriteString(fmt.Sprintf("%q", opID))
+				b.WriteString(", ")
+				b.WriteString(errExpr)
+				b.WriteString(", nil, ")
+				b.WriteString(respExpr)
+				b.WriteString(")\n")
+			}
+			if method.OutEmpty {
+				b.WriteString("\t\t\terr := h.")
+				b.WriteString(method.Handler)
+				b.WriteString("(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", seq)\n")
+				writeAudit("err", "nil")
+				b.WriteString("\t\t\tif err != nil {\n")
+				b.WriteString("\t\t\t\tHandleReqErr(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", err, r, w)\n")
+				b.WriteString("\t\t\t\treturn\n")
+				b.WriteString("\t\t\t}\n")
+				b.WriteString("\t\t\tw.WriteHeader(http.StatusNoContent)\n")
+				return
+			}
+			b.WriteString("\t\t\tres, err := h.")
+			b.WriteString(method.Handler)
+			b.WriteString("(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", seq)\n")
+			respPayloadExpr := "res"
+			if method.OutputAudit {
+				respPayloadExpr = "res.ToAudit()"
+			}
+			writeAudit("err", respPayloadExpr)
+			b.WriteString("\t\t\tRespond(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", r, w, res, err)\n")
 			return
 		}
 		if !method.InputEmpty {
@@ -557,7 +716,11 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString(m.Handler)
 			b.WriteString("(")
 			b.WriteString(ctxType)
-			if !m.InputEmpty {
+			if m.ClientStreaming {
+				b.WriteString(", iter.Seq2[*")
+				b.WriteString(m.Input)
+				b.WriteString(", error]")
+			} else if !m.InputEmpty {
 				b.WriteString(", *")
 				b.WriteString(m.Input)
 			}
@@ -2610,6 +2773,7 @@ const muxUtilSource = `// Code generated by cleanproto. DO NOT EDIT.
 package __PACKAGE__
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -2702,6 +2866,49 @@ func decodeWithMaxBodySize[T any](r *http.Request, maxRequestBodySize int, decod
 		return nil, ApiErr{DisplayErr: "Request body too large", InternalErr: "request body exceeds max size", Code: http.StatusRequestEntityTooLarge}
 	}
 	return decode(b)
+}
+
+// StreamReader reads uvarint length-prefixed protobuf frames from r. It is used
+// by generated client-streaming handlers to lazily decode request frames.
+type StreamReader struct {
+	r            *bufio.Reader
+	maxFrameSize int
+}
+
+// NewStreamReader wraps r with a buffered reader for length-prefixed frames.
+// If maxFrameSize > 0, frames whose payload exceeds it are rejected with an
+// ApiErr carrying http.StatusRequestEntityTooLarge.
+func NewStreamReader(r io.Reader, maxFrameSize int) *StreamReader {
+	return &StreamReader{r: bufio.NewReader(r), maxFrameSize: maxFrameSize}
+}
+
+// Next returns the payload bytes of the next frame. At end-of-stream returns
+// (nil, false, nil). Framing or size errors return (nil, false, err).
+func (s *StreamReader) Next() ([]byte, bool, error) {
+	size, err := binary.ReadUvarint(s.r)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, false, nil
+		}
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, false, fmt.Errorf("stream truncated mid-frame header: %w", err)
+		}
+		return nil, false, err
+	}
+	if s.maxFrameSize > 0 && size > uint64(s.maxFrameSize) {
+		return nil, false, ApiErr{DisplayErr: "Request frame too large", InternalErr: "request frame exceeds max size", Code: http.StatusRequestEntityTooLarge}
+	}
+	if size == 0 {
+		return nil, true, nil
+	}
+	payload := make([]byte, size)
+	if _, err := io.ReadFull(s.r, payload); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, false, fmt.Errorf("stream truncated mid-frame body: %w", err)
+		}
+		return nil, false, err
+	}
+	return payload, true, nil
 }
 
 func WriteStreamFrame(w io.Writer, payload []byte) error {

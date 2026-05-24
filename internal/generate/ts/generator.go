@@ -61,20 +61,24 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 
 func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, error) {
 	type capiMethod struct {
-		Name       string
-		Path       string
-		HTTPMethod string
-		InputType  string
-		OutputType string
+		Name            string
+		Path            string
+		HTTPMethod      string
+		InputType       string
+		OutputType      string
+		ClientStreaming bool
+		ServerStreaming bool
 	}
 	methods := make([]capiMethod, 0)
 	decodeImports := map[string]struct{}{}
 	encodeImports := map[string]struct{}{}
 	typeImports := map[string]struct{}{}
+	hasClientStream := false
+	hasServerStream := false
 	for _, svc := range file.Services {
 		for _, m := range svc.Methods {
-			if m.IsStreamingServer {
-				// Streaming RPCs are not yet implemented in the TS client; skip.
+			if m.IsStreamingServer && !m.IsStreamingClient {
+				// Pure server-streaming RPCs are not yet implemented in the TS client; skip.
 				continue
 			}
 			httpMethod, path, ok := deriveHTTP(m.Name)
@@ -89,12 +93,25 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			if !ok {
 				return "", fmt.Errorf("unknown method output type: %s", m.OutputFullName)
 			}
+			if m.IsStreamingClient {
+				if inType == "Empty" {
+					return "", fmt.Errorf("client-streaming RPC %s cannot have Empty input", m.Name)
+				}
+				if httpMethod == "GET" {
+					return "", fmt.Errorf("client-streaming RPC %s cannot use a Get* verb; use Post/Put/Patch/Delete", m.Name)
+				}
+			}
+			if m.IsStreamingServer && outType == "Empty" {
+				return "", fmt.Errorf("streaming RPC %s cannot have Empty output", m.Name)
+			}
 			cm := capiMethod{
-				Name:       lowerFirst(m.Name),
-				Path:       path,
-				HTTPMethod: httpMethod,
-				InputType:  inType,
-				OutputType: outType,
+				Name:            lowerFirst(m.Name),
+				Path:            path,
+				HTTPMethod:      httpMethod,
+				InputType:       inType,
+				OutputType:      outType,
+				ClientStreaming: m.IsStreamingClient,
+				ServerStreaming: m.IsStreamingServer,
 			}
 			if inType != "Empty" {
 				encodeImports["encode"+inType] = struct{}{}
@@ -105,6 +122,12 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				typeImports[outType] = struct{}{}
 			}
 			methods = append(methods, cm)
+			if m.IsStreamingClient {
+				hasClientStream = true
+			}
+			if m.IsStreamingServer {
+				hasServerStream = true
+			}
 		}
 	}
 	if len(methods) == 0 {
@@ -144,6 +167,79 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	b.WriteString("type HeaderProvider = () => Record<string, string>;\n")
 	b.WriteString("type ErrorHandler = (response: Response) => Promise<never>;\n")
 	b.WriteString("type RequestBody = BodyInit;\n\n")
+	if hasServerStream {
+		b.WriteString("async function* readLengthPrefixedFrames<T>(body: ReadableStream<Uint8Array>, decode: (buf: ArrayBuffer) => T): AsyncIterable<T> {\n")
+		b.WriteString("  const reader = body.getReader();\n")
+		b.WriteString("  let buf = new Uint8Array(0);\n")
+		b.WriteString("  while (true) {\n")
+		b.WriteString("    let len = 0;\n")
+		b.WriteString("    let shift = 0;\n")
+		b.WriteString("    let headerLen = 0;\n")
+		b.WriteString("    let parsed = false;\n")
+		b.WriteString("    for (let i = 0; i < buf.length && i < 10; i++) {\n")
+		b.WriteString("      const byte = buf[i];\n")
+		b.WriteString("      len |= (byte & 0x7f) << shift;\n")
+		b.WriteString("      shift += 7;\n")
+		b.WriteString("      if ((byte & 0x80) === 0) {\n")
+		b.WriteString("        headerLen = i + 1;\n")
+		b.WriteString("        parsed = true;\n")
+		b.WriteString("        break;\n")
+		b.WriteString("      }\n")
+		b.WriteString("    }\n")
+		b.WriteString("    if (!parsed) {\n")
+		b.WriteString("      const { done, value } = await reader.read();\n")
+		b.WriteString("      if (done) {\n")
+		b.WriteString("        if (buf.length === 0) return;\n")
+		b.WriteString("        throw new Error('stream truncated mid-frame header');\n")
+		b.WriteString("      }\n")
+		b.WriteString("      const next = new Uint8Array(buf.length + value.length);\n")
+		b.WriteString("      next.set(buf, 0);\n")
+		b.WriteString("      next.set(value, buf.length);\n")
+		b.WriteString("      buf = next;\n")
+		b.WriteString("      continue;\n")
+		b.WriteString("    }\n")
+		b.WriteString("    while (buf.length < headerLen + len) {\n")
+		b.WriteString("      const { done, value } = await reader.read();\n")
+		b.WriteString("      if (done) throw new Error('stream truncated mid-frame body');\n")
+		b.WriteString("      const next = new Uint8Array(buf.length + value.length);\n")
+		b.WriteString("      next.set(buf, 0);\n")
+		b.WriteString("      next.set(value, buf.length);\n")
+		b.WriteString("      buf = next;\n")
+		b.WriteString("    }\n")
+		b.WriteString("    const payload = buf.slice(headerLen, headerLen + len);\n")
+		b.WriteString("    yield decode(payload.buffer);\n")
+		b.WriteString("    buf = buf.slice(headerLen + len);\n")
+		b.WriteString("  }\n")
+		b.WriteString("}\n\n")
+	}
+	if hasClientStream {
+		b.WriteString("function writeLengthPrefixedFrames<T>(asyncIterable: AsyncIterable<T>, encode: (item: T) => Uint8Array): ReadableStream<Uint8Array> {\n")
+		b.WriteString("  return new ReadableStream<Uint8Array>({\n")
+		b.WriteString("    async start(controller) {\n")
+		b.WriteString("      try {\n")
+		b.WriteString("        for await (const item of asyncIterable) {\n")
+		b.WriteString("          const payload = encode(item);\n")
+		b.WriteString("          const header = new Uint8Array(10);\n")
+		b.WriteString("          let pos = 0;\n")
+		b.WriteString("          let v = payload.length;\n")
+		b.WriteString("          while (v > 0x7f) {\n")
+		b.WriteString("            header[pos++] = (v & 0x7f) | 0x80;\n")
+		b.WriteString("            v = Math.floor(v / 128);\n")
+		b.WriteString("          }\n")
+		b.WriteString("          header[pos++] = v & 0x7f;\n")
+		b.WriteString("          const frame = new Uint8Array(pos + payload.length);\n")
+		b.WriteString("          frame.set(header.subarray(0, pos), 0);\n")
+		b.WriteString("          frame.set(payload, pos);\n")
+		b.WriteString("          controller.enqueue(frame);\n")
+		b.WriteString("        }\n")
+		b.WriteString("        controller.close();\n")
+		b.WriteString("      } catch (err) {\n")
+		b.WriteString("        controller.error(err);\n")
+		b.WriteString("      }\n")
+		b.WriteString("    },\n")
+		b.WriteString("  });\n")
+		b.WriteString("}\n\n")
+	}
 	b.WriteString("export class Capi {\n")
 	b.WriteString("  baseURL: string;\n")
 	b.WriteString("  headerProvider: HeaderProvider;\n\n")
@@ -153,15 +249,79 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	b.WriteString("    this.headerProvider = headerProvider == null ? () => ({}) : headerProvider;\n")
 	b.WriteString("    this.errorHandler = errorHandler == null ? async (response: Response) => { throw new Error(`HTTP ${response.status}`); } : errorHandler;\n")
 	b.WriteString("  }\n\n")
-	b.WriteString("  async #request(path: string, { method = 'GET', body }: { method?: string; body?: RequestBody } = {}): Promise<Response> {\n")
+	b.WriteString("  async #request(path: string, { method = 'GET', body, signal, contentType, duplex }: { method?: string; body?: RequestBody; signal?: AbortSignal; contentType?: string; duplex?: 'half' } = {}): Promise<Response> {\n")
 	b.WriteString("    const headers = this.headerProvider() || {};\n")
 	b.WriteString("    headers['Accept'] = 'application/x-protobuf';\n")
 	b.WriteString("    if (body !== undefined) {\n")
-	b.WriteString("      headers['Content-Type'] = 'application/x-protobuf';\n")
+	b.WriteString("      headers['Content-Type'] = contentType || 'application/x-protobuf';\n")
 	b.WriteString("    }\n")
-	b.WriteString("    return fetch(`${this.baseURL}${path}`, { method, headers, body, credentials: 'include' });\n")
+	b.WriteString("    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal, credentials: 'include' };\n")
+	b.WriteString("    if (duplex) { init.duplex = duplex; }\n")
+	b.WriteString("    return fetch(`${this.baseURL}${path}`, init);\n")
 	b.WriteString("  }\n\n")
 	for _, m := range methods {
+		if m.ClientStreaming && m.ServerStreaming {
+			b.WriteString("  ")
+			b.WriteString(m.Name)
+			b.WriteString("(stream: AsyncIterable<")
+			b.WriteString(m.InputType)
+			b.WriteString(">, options: { signal?: AbortSignal } = {}): AsyncIterable<")
+			b.WriteString(m.OutputType)
+			b.WriteString("> {\n")
+			b.WriteString("    const self = this;\n")
+			b.WriteString("    return {\n")
+			b.WriteString("      [Symbol.asyncIterator]: async function* () {\n")
+			b.WriteString("        const response = await self.#request('")
+			b.WriteString(m.Path)
+			b.WriteString("', { method: '")
+			b.WriteString(m.HTTPMethod)
+			b.WriteString("', body: writeLengthPrefixedFrames(stream, encode")
+			b.WriteString(m.InputType)
+			b.WriteString(") as unknown as BodyInit, signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });\n")
+			b.WriteString("        if (!response.ok) {\n")
+			b.WriteString("          return self.errorHandler(response);\n")
+			b.WriteString("        }\n")
+			b.WriteString("        if (!response.body) throw new Error('missing response body');\n")
+			b.WriteString("        yield* readLengthPrefixedFrames(response.body, decode")
+			b.WriteString(m.OutputType)
+			b.WriteString(");\n")
+			b.WriteString("      },\n")
+			b.WriteString("    };\n")
+			b.WriteString("  }\n\n")
+			continue
+		}
+		if m.ClientStreaming {
+			b.WriteString("  async ")
+			b.WriteString(m.Name)
+			b.WriteString("(stream: AsyncIterable<")
+			b.WriteString(m.InputType)
+			if m.OutputType == "Empty" {
+				b.WriteString(">, options: { signal?: AbortSignal } = {}): Promise<void> {\n")
+			} else {
+				b.WriteString(">, options: { signal?: AbortSignal } = {}): Promise<")
+				b.WriteString(m.OutputType)
+				b.WriteString("> {\n")
+			}
+			b.WriteString("    const response = await this.#request('")
+			b.WriteString(m.Path)
+			b.WriteString("', { method: '")
+			b.WriteString(m.HTTPMethod)
+			b.WriteString("', body: writeLengthPrefixedFrames(stream, encode")
+			b.WriteString(m.InputType)
+			b.WriteString(") as unknown as BodyInit, signal: options.signal, contentType: 'application/protobuf-stream', duplex: 'half' });\n")
+			b.WriteString("    if (!response.ok) {\n")
+			b.WriteString("      return this.errorHandler(response);\n")
+			b.WriteString("    }\n")
+			if m.OutputType == "Empty" {
+				b.WriteString("    await response.arrayBuffer();\n")
+			} else {
+				b.WriteString("    return decode")
+				b.WriteString(m.OutputType)
+				b.WriteString("(await response.arrayBuffer());\n")
+			}
+			b.WriteString("  }\n\n")
+			continue
+		}
 		b.WriteString("  async ")
 		b.WriteString(m.Name)
 		if m.InputType == "Empty" {
