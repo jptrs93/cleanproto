@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
