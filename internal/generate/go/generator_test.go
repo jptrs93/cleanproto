@@ -77,6 +77,82 @@ func TestBuildGoMuxFileUsesToAuditWhenAuditModelsExist(t *testing.T) {
 	}
 }
 
+func TestBuildGoFileDataGoValueMessageField(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{
+				Name:     "Child",
+				FullName: "example.Child",
+				Fields: []ir.Field{
+					{Name: "count", Number: 1, Kind: ir.KindInt32, GoEncode: true},
+					{Name: "label", Number: 2, Kind: ir.KindString, GoEncode: true},
+				},
+			},
+			{
+				Name:     "Parent",
+				FullName: "example.Parent",
+				Fields: []ir.Field{
+					{Name: "value_child", Number: 1, Kind: ir.KindMessage, MessageFullName: "example.Child", GoEncode: true, GoValue: true},
+					{Name: "pointer_child", Number: 2, Kind: ir.KindMessage, MessageFullName: "example.Child", GoEncode: true},
+				},
+			},
+		},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoFileData: %v", err)
+	}
+
+	var parent, child goMessage
+	for _, msg := range data.Messages {
+		if msg.Name == "Parent" {
+			parent = msg
+		}
+		if msg.Name == "Child" {
+			child = msg
+		}
+	}
+	if len(parent.Fields) != 2 {
+		t.Fatalf("expected parent fields, got %#v", parent.Fields)
+	}
+	if parent.Fields[0].Type != "Child" {
+		t.Fatalf("expected go_value message field to be Child, got %q", parent.Fields[0].Type)
+	}
+	if parent.Fields[1].Type != "*Child" {
+		t.Fatalf("expected default message field to stay *Child, got %q", parent.Fields[1].Type)
+	}
+	if !child.HasIsZero || !strings.Contains(child.IsZeroExpr, "m.Count == 0") || !strings.Contains(child.IsZeroExpr, "m.Label == \"\"") {
+		t.Fatalf("expected Child IsZero expression for value-message encoding, got has=%v expr=%q", child.HasIsZero, child.IsZeroExpr)
+	}
+	encode := strings.Join(parent.EncodeLines, "\n")
+	if !strings.Contains(encode, "if !m.ValueChild.IsZero() {") {
+		t.Fatalf("expected value message encode to skip zero nested message, got:\n%s", encode)
+	}
+	if !strings.Contains(encode, "b = protowire.AppendBytes(b, m.ValueChild.Encode())") {
+		t.Fatalf("expected value message encode to include non-zero nested message, got:\n%s", encode)
+	}
+	if !strings.Contains(encode, "if m.PointerChild != nil {") {
+		t.Fatalf("expected default message encode to keep pointer nil guard, got:\n%s", encode)
+	}
+
+	var decode strings.Builder
+	for _, c := range parent.DecodeCases {
+		decode.WriteString(strings.Join(c.Lines, "\n"))
+	}
+	if !strings.Contains(decode.String(), "m.ValueChild = *item") {
+		t.Fatalf("expected value message decode to assign decoded value, got:\n%s", decode.String())
+	}
+	if !strings.Contains(decode.String(), "m.PointerChild = item") {
+		t.Fatalf("expected default message decode to keep pointer assignment, got:\n%s", decode.String())
+	}
+}
+
 func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 	file := ir.File{
 		GoPackage: "example",

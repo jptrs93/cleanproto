@@ -66,6 +66,15 @@ var E_GoSlicePtr = &protoimpl.ExtensionInfo{
 	Filename:      OptionsProtoPath,
 }
 
+var E_GoValue = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50022,
+	Name:          "cp.go_value",
+	Tag:           "varint,50022,opt,name=go_value",
+	Filename:      OptionsProtoPath,
+}
+
 var E_JsIgnore = &protoimpl.ExtensionInfo{
 	ExtendedType:  (*descriptorpb.FieldOptions)(nil),
 	ExtensionType: (*bool)(nil),

@@ -50,6 +50,7 @@ extend google.protobuf.FieldOptions {
   bool go_encode = 50012;
   bool go_ignore = 50014;
   bool go_slice_ptr = 50021;
+  bool go_value = 50022;
 
   string js_type = 50011;
   bool js_encode = 50013;

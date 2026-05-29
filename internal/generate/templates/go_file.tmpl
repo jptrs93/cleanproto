@@ -27,6 +27,12 @@ type {{.Name}} struct {
 {{- end}}
 }
 
+{{if .HasIsZero}}
+func (m {{.Name}}) IsZero() bool {
+    return {{.IsZeroExpr}}
+}
+
+{{end}}
 func (m *{{.Name}}) Encode() []byte {
     var b []byte
 {{- range .EncodeLines}}

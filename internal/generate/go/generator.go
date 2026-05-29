@@ -979,6 +979,8 @@ type goEnumValue struct {
 type goMessage struct {
 	Name          string
 	Fields        []goField
+	HasIsZero     bool
+	IsZeroExpr    string
 	EncodeLines   []string
 	DecodeCases   []goDecodeCase
 	NeedsMsgBytes bool
@@ -1011,8 +1013,9 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map
 	}
 	var usesTime bool
 	var usesUUID bool
+	isZeroNeeds := computeGoIsZeroNeeds(msgIndex)
 	for _, msg := range file.Messages {
-		goMsg, uuidNeeded, timeNeeded, err := buildGoMessage(msg, msgIndex, enumIndex, goJSONTags)
+		goMsg, uuidNeeded, timeNeeded, err := buildGoMessage(msg, msgIndex, enumIndex, goJSONTags, isZeroNeeds[msg.FullName])
 		if err != nil {
 			return goFileData{}, err
 		}
@@ -1037,8 +1040,8 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map
 	return data, nil
 }
 
-func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, goJSONTags string) (goMessage, bool, bool, error) {
-	out := goMessage{Name: msg.Name}
+func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, goJSONTags string, needsIsZero bool) (goMessage, bool, bool, error) {
+	out := goMessage{Name: msg.Name, HasIsZero: needsIsZero}
 	var usesTime bool
 	var usesUUID bool
 	visibleFields := goVisibleFields(msg.Fields)
@@ -1068,6 +1071,9 @@ func buildGoMessage(msg ir.Message, msgIndex map[string]ir.Message, enumIndex ma
 			JSONTag:    jsonTag,
 			HasJSONTag: jsonTag != "",
 		})
+	}
+	if needsIsZero {
+		out.IsZeroExpr = buildGoIsZeroExpr(msg)
 	}
 
 	encodeLines, err := buildGoEncodeLines(msg, msgIndex, enumIndex)
@@ -1110,6 +1116,38 @@ func goVisibleFields(fields []ir.Field) []ir.Field {
 	return visible
 }
 
+func computeGoIsZeroNeeds(msgIndex map[string]ir.Message) map[string]bool {
+	needs := map[string]bool{}
+	var queue []string
+	add := func(fullName string) {
+		if fullName == "" || needs[fullName] {
+			return
+		}
+		if _, ok := msgIndex[fullName]; !ok {
+			return
+		}
+		needs[fullName] = true
+		queue = append(queue, fullName)
+	}
+	for _, msg := range msgIndex {
+		for _, field := range msg.Fields {
+			if field.GoValue {
+				add(field.MessageFullName)
+			}
+		}
+	}
+	for len(queue) > 0 {
+		msg := msgIndex[queue[0]]
+		queue = queue[1:]
+		for _, field := range msg.Fields {
+			if field.GoValue {
+				add(field.MessageFullName)
+			}
+		}
+	}
+	return needs
+}
+
 func toSnakeCase(name string) string {
 	if name == "" {
 		return ""
@@ -1135,6 +1173,58 @@ func goJSONTagOmitEmpty(field ir.Field) bool {
 		return true
 	}
 	return field.Kind == ir.KindString
+}
+
+func buildGoIsZeroExpr(msg ir.Message) string {
+	var conditions []string
+	for _, field := range goVisibleFields(msg.Fields) {
+		conditions = append(conditions, goIsZeroCondition("m."+ir.GoName(field.Name), field))
+	}
+	if len(conditions) == 0 {
+		return "true"
+	}
+	return strings.Join(conditions, " &&\n\t\t")
+}
+
+func goIsZeroCondition(fieldName string, field ir.Field) string {
+	if field.IsMap || field.IsRepeated {
+		return fmt.Sprintf("len(%s) == 0", fieldName)
+	}
+	if field.IsOptional {
+		return fieldName + " == nil"
+	}
+	if field.GoType != "" {
+		switch field.GoType {
+		case "time.Time":
+			return fieldName + ".IsZero()"
+		case "time.Duration":
+			return fieldName + " == 0"
+		case "github.com/google/uuid.UUID":
+			return fieldName + " == uuid.Nil"
+		}
+	}
+	if field.IsTimestamp {
+		return fieldName + ".IsZero()"
+	}
+	if field.IsDuration {
+		return fieldName + " == 0"
+	}
+	if field.Kind == ir.KindMessage {
+		if field.GoValue {
+			return fieldName + ".IsZero()"
+		}
+		return fieldName + " == nil"
+	}
+	if field.Kind == ir.KindBytes {
+		return fmt.Sprintf("len(%s) == 0", fieldName)
+	}
+	zero := "0"
+	if field.Kind == ir.KindString {
+		zero = "\"\""
+	} else if field.Kind == ir.KindBool {
+		zero = "false"
+	}
+	return fieldName + " == " + zero
 }
 
 func goFieldType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (string, bool, error) {
@@ -1214,6 +1304,9 @@ func goFieldType(field ir.Field, msgIndex map[string]ir.Message, enumIndex map[s
 		msg, ok := msgIndex[field.MessageFullName]
 		if !ok {
 			return "", false, fmt.Errorf("unknown message type: %s", field.MessageFullName)
+		}
+		if field.GoValue {
+			return msg.Name, false, nil
 		}
 		return "*" + msg.Name, false, nil
 	}
@@ -1356,7 +1449,11 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 				lines = append(lines, repeatedLines...)
 			}
 		case field.Kind == ir.KindMessage:
-			lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
+			if field.GoValue {
+				lines = append(lines, fmt.Sprintf("if !%s.IsZero() {", fieldName))
+			} else {
+				lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
+			}
 			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
 			lines = append(lines, fmt.Sprintf("b = protowire.AppendBytes(b, %s.Encode())", fieldName))
 			lines = append(lines, "}")
@@ -2110,7 +2207,11 @@ func buildGoDecodeCases(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 			c.Lines = append(c.Lines, fmt.Sprintf("var item *%s", msgType))
 			c.Lines = append(c.Lines, fmt.Sprintf("item, err = Decode%s(msgBytes)", msgType))
 			c.Lines = append(c.Lines, "if err == nil {")
-			c.Lines = append(c.Lines, fmt.Sprintf("%s = item", fieldName))
+			if field.GoValue {
+				c.Lines = append(c.Lines, fmt.Sprintf("%s = *item", fieldName))
+			} else {
+				c.Lines = append(c.Lines, fmt.Sprintf("%s = item", fieldName))
+			}
 			c.Lines = append(c.Lines, "}")
 			c.Lines = append(c.Lines, "}")
 		case field.IsOptional:

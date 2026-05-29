@@ -344,6 +344,7 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 		tsEncode := true
 		var goIgnore bool
 		var goSlicePtr *bool
+		var goValue bool
 		var jsIgnore bool
 		var tsIgnore bool
 		var jsonIgnore bool
@@ -412,6 +413,13 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 		if goSlicePtr != nil && !field.IsList() {
 			return nil, fmt.Errorf("cp.go_slice_ptr only applies to repeated fields: %s", field.FullName())
 		}
+		goValue, err = goValueFromFieldOptions(field)
+		if err != nil {
+			return nil, err
+		}
+		if goValue && (field.IsList() || field.IsMap() || kind != ir.KindMessage || isTimestamp || isDuration || goType != "") {
+			return nil, fmt.Errorf("cp.go_value only applies to singular non-native message fields: %s", field.FullName())
+		}
 		jsIgnore, err = jsIgnoreFromFieldOptions(field)
 		if err != nil {
 			return nil, err
@@ -453,6 +461,7 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 			GoEncode:        goEncode,
 			GoIgnore:        goIgnore,
 			GoSlicePtr:      goSlicePtr,
+			GoValue:         goValue,
 			JsEncode:        jsEncode,
 			JsIgnore:        jsIgnore,
 			TsEncode:        tsEncode,
