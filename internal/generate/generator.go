@@ -13,6 +13,8 @@ type Options struct {
 	TsOut      string
 	GoJSONTags string
 	GoCtxType  string
+	GoClient   bool
+	GoServer   bool
 }
 
 type Generator interface {

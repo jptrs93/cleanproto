@@ -6,7 +6,7 @@ Currently supports Go, JavaScript, and TypeScript.
 
 | Language | Models | Client stubs | Server stubs | Server-streaming RPC | Client-streaming RPC | Bidi-streaming RPC |
 | --- | --- | --- | --- | --- | --- | --- |
-| Go | Yes | No | Yes | Yes (handler) | Yes (handler) | Yes (handler) |
+| Go | Yes | Yes | Yes | Yes | Yes | Yes |
 | JavaScript | Yes | Yes | No | Yes (client) | Yes (client) | Yes (client) |
 | TypeScript | Yes | Yes | No | No | Yes (client) | Yes (client) |
 
@@ -26,6 +26,8 @@ cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out
 | `-go.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated Go files. | none |
 | `-go.jsontags <style>` | No | Go JSON tags style. Supported: `snake`. | none |
 | `-go.ctxtype <type>` | No | Go server auth context type for handler interface, verifyAuth return, post-auth middleware, and audit callback when server stubs are generated. | `context.Context` |
+| `-go.client` | No | Generate Go client stubs in `client.gen.go` using `<ServiceBase>Capi` names, e.g. `LibraryService` -> `LibraryCapi`. | `false` |
+| `-go.server` | No | Generate Go server mux stubs in `mux.gen.go` when services exist. Set `-go.server=false` for client-only/model-only Go output. | `true` |
 | `-js.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated JavaScript files. | none |
 | `-ts.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated TypeScript files. | none |
 

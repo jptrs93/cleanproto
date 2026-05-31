@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jptrs93/cleanproto/internal/generate"
 	"github.com/jptrs93/cleanproto/internal/ir"
 )
 
@@ -661,6 +662,89 @@ func TestBuildGoMuxFileErrorsOnServiceNameCollision(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate generated service handler name: FooBarHandler") {
 		t.Fatalf("expected duplicate handler error, got: %v", err)
+	}
+}
+
+func TestBuildGoClientFileUsesCapiNameAndServiceRoutes(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{Name: "Book", FullName: "example.Book", Fields: []ir.Field{{Name: "id", Kind: ir.KindString}}},
+			{Name: "GetBookReq", FullName: "example.GetBookReq", Fields: []ir.Field{{Name: "id", Kind: ir.KindString}}},
+			{Name: "CheckoutBookReq", FullName: "example.CheckoutBookReq", Fields: []ir.Field{{Name: "id", Kind: ir.KindString}}},
+		},
+		Services: []ir.Service{{
+			Name: "LibraryService",
+			Methods: []ir.Method{
+				{Name: "GetLibraryBookV1", InputFullName: "example.GetBookReq", OutputFullName: "example.Book", URL: "/v1/custom/book"},
+				{Name: "PostLibraryBook_CheckoutV1", InputFullName: "example.CheckoutBookReq", OutputFullName: "cp.Empty"},
+				{Name: "PostLibraryBook_BulkV1", InputFullName: "example.Book", OutputFullName: "example.Book", IsStreamingClient: true},
+				{Name: "PostLibraryBook_LookupV1", InputFullName: "example.GetBookReq", OutputFullName: "example.Book", IsStreamingClient: true, IsStreamingServer: true},
+			},
+		}},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	client, err := buildGoClientFile(file, msgIndex, file.GoPackage)
+	if err != nil {
+		t.Fatalf("buildGoClientFile: %v", err)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "client.gen.go", client, parser.AllErrors); err != nil {
+		t.Fatalf("generated client should parse: %v\n%s", err, client)
+	}
+	checks := []string{
+		"type LibraryCapi struct",
+		"func NewLibraryCapi(baseURL string, opts ...LibraryCapiOption) *LibraryCapi",
+		"func (c *LibraryCapi) GetLibraryBookV1(ctx context.Context, req *GetBookReq) (*Book, error)",
+		"\"/v1/custom/book\"",
+		"func (c *LibraryCapi) PostLibraryBookCheckoutV1(ctx context.Context, req *CheckoutBookReq) error",
+		"func (c *LibraryCapi) PostLibraryBookBulkV1(ctx context.Context, reqs iter.Seq2[*Book, error]) (*Book, error)",
+		"func (c *LibraryCapi) PostLibraryBookLookupV1(ctx context.Context, reqs iter.Seq2[*GetBookReq, error]) iter.Seq2[*Book, error]",
+	}
+	for _, check := range checks {
+		if !strings.Contains(client, check) {
+			t.Fatalf("expected generated client to contain %q, got:\n%s", check, client)
+		}
+	}
+	if strings.Contains(client, "LibraryServiceCapi") {
+		t.Fatalf("expected Service suffix to be trimmed from client name, got:\n%s", client)
+	}
+}
+
+func TestGoGeneratorClientOnlySkipsMuxFile(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{{
+			Name:     "Reply",
+			FullName: "example.Reply",
+			Fields:   []ir.Field{{Name: "value", Number: 1, Kind: ir.KindString, GoEncode: true}},
+		}},
+		Services: []ir.Service{{
+			Name: "LibraryService",
+			Methods: []ir.Method{{
+				Name:           "GetReplyV1",
+				InputFullName:  "cp.Empty",
+				OutputFullName: "example.Reply",
+			}},
+		}},
+	}
+
+	outputs, err := Generator{}.Generate([]ir.File{file}, generate.Options{GoOut: "gen/go", GoClient: true, GoServer: false})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	paths := map[string]bool{}
+	for _, output := range outputs {
+		paths[output.Path] = true
+	}
+	if !paths["gen/go/client.gen.go"] {
+		t.Fatalf("expected client.gen.go in outputs, got %#v", paths)
+	}
+	if paths["gen/go/mux.gen.go"] {
+		t.Fatalf("did not expect mux.gen.go when GoServer is false, got %#v", paths)
 	}
 }
 

@@ -32,6 +32,8 @@ func main() {
 	var tsOut string
 	var goJSONTags string
 	var goCtxType string
+	var goClient bool
+	var goServer bool = true
 
 	flag.Var(&importPaths, "proto_path", "proto import path (repeatable)")
 	flag.StringVar(&goOut, "go.out", "", "output directory for Go")
@@ -39,6 +41,8 @@ func main() {
 	flag.StringVar(&tsOut, "ts.out", "", "output directory for TS")
 	flag.StringVar(&goJSONTags, "go.jsontags", "", "Go JSON tags style (snake)")
 	flag.StringVar(&goCtxType, "go.ctxtype", "", "Go server auth context type override")
+	flag.BoolVar(&goClient, "go.client", false, "generate Go client stubs")
+	flag.BoolVar(&goServer, "go.server", true, "generate Go server mux stubs")
 	flag.Parse()
 
 	if len(flag.Args()) == 0 {
@@ -71,6 +75,8 @@ func main() {
 		TsOut:      cleanPath(tsOut),
 		GoJSONTags: goJSONTags,
 		GoCtxType:  goCtxType,
+		GoClient:   goClient,
+		GoServer:   goServer,
 	}
 
 	generators := []generate.Generator{
