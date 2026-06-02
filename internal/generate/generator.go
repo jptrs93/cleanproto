@@ -8,13 +8,14 @@ type OutputFile struct {
 }
 
 type Options struct {
-	GoOut      string
-	JsOut      string
-	TsOut      string
-	GoJSONTags string
-	GoCtxType  string
-	GoClient   bool
-	GoServer   bool
+	GoOut           string
+	JsOut           string
+	TsOut           string
+	GoJSONTags      string
+	GoCtxType       string
+	GoClient        bool
+	GoClientService string
+	GoServer        bool
 }
 
 type Generator interface {

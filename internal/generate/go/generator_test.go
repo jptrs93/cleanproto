@@ -688,7 +688,7 @@ func TestBuildGoClientFileUsesCapiNameAndServiceRoutes(t *testing.T) {
 		msgIndex[msg.FullName] = msg
 	}
 
-	client, err := buildGoClientFile(file, msgIndex, file.GoPackage)
+	client, err := buildGoClientFile(file, msgIndex, file.GoPackage, "")
 	if err != nil {
 		t.Fatalf("buildGoClientFile: %v", err)
 	}

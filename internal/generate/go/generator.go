@@ -94,7 +94,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			})
 		}
 		if len(file.Services) > 0 && options.GoClient {
-			clientContent, err := buildGoClientFile(file, msgIndex, pkg)
+			clientContent, err := buildGoClientFile(file, msgIndex, pkg, options.GoClientService)
 			if err != nil {
 				return nil, err
 			}
@@ -131,7 +131,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	return outputs, nil
 }
 
-func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string) (string, error) {
+func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string, serviceFilter string) (string, error) {
 	type clientMethod struct {
 		Name            string
 		HTTPMethod      string
@@ -154,6 +154,9 @@ func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string)
 	needsBytes := false
 	needsClientStream := false
 	for _, svc := range file.Services {
+		if serviceFilter != "" && svc.Name != serviceFilter {
+			continue
+		}
 		cs := clientService{Name: goClientNameFromService(svc.Name)}
 		if _, ok := clientNames[cs.Name]; ok {
 			return "", fmt.Errorf("duplicate generated Go client name: %s", cs.Name)
