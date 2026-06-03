@@ -105,7 +105,7 @@ func TestBuildGoFileDataGoValueMessageField(t *testing.T) {
 		msgIndex[msg.FullName] = msg
 	}
 
-	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "")
+	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "", nil, nil)
 	if err != nil {
 		t.Fatalf("buildGoFileData: %v", err)
 	}
@@ -745,6 +745,103 @@ func TestGoGeneratorClientOnlySkipsMuxFile(t *testing.T) {
 	}
 	if paths["gen/go/mux.gen.go"] {
 		t.Fatalf("did not expect mux.gen.go when GoServer is false, got %#v", paths)
+	}
+}
+
+func TestGoGeneratorClientServiceDropsOtherServiceTypes(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Enums: []ir.Enum{
+			{Name: "SharedEnum", FullName: "example.SharedEnum", Values: []ir.EnumValue{{Name: "UNSET"}}},
+			{Name: "OtherEnum", FullName: "example.OtherEnum", Values: []ir.EnumValue{{Name: "UNSET"}}},
+			{Name: "StandaloneEnum", FullName: "example.StandaloneEnum", Values: []ir.EnumValue{{Name: "UNSET"}}},
+		},
+		Messages: []ir.Message{
+			{
+				Name: "KeptReq", FullName: "example.KeptReq",
+				Fields: []ir.Field{
+					{Name: "nested", Number: 1, Kind: ir.KindMessage, MessageFullName: "example.KeptNested"},
+					{Name: "shared", Number: 2, Kind: ir.KindEnum, EnumFullName: "example.SharedEnum"},
+				},
+			},
+			{Name: "KeptNested", FullName: "example.KeptNested", Fields: []ir.Field{{Name: "v", Number: 1, Kind: ir.KindString}}},
+			{Name: "KeptResp", FullName: "example.KeptResp", Fields: []ir.Field{{Name: "v", Number: 1, Kind: ir.KindString}}},
+			{
+				Name: "SharedMsg", FullName: "example.SharedMsg",
+				Fields: []ir.Field{{Name: "v", Number: 1, Kind: ir.KindString}},
+			},
+			{
+				Name: "OtherReq", FullName: "example.OtherReq",
+				Fields: []ir.Field{
+					{Name: "other", Number: 1, Kind: ir.KindEnum, EnumFullName: "example.OtherEnum"},
+					{Name: "shared", Number: 2, Kind: ir.KindMessage, MessageFullName: "example.SharedMsg"},
+				},
+			},
+			{Name: "OtherResp", FullName: "example.OtherResp", Fields: []ir.Field{{Name: "v", Number: 1, Kind: ir.KindString}}},
+			// Standalone: not referenced by any RPC, must be kept.
+			{
+				Name: "StandaloneMsg", FullName: "example.StandaloneMsg",
+				Fields: []ir.Field{{Name: "e", Number: 1, Kind: ir.KindEnum, EnumFullName: "example.StandaloneEnum"}},
+			},
+		},
+		Services: []ir.Service{
+			{
+				Name: "KeptService",
+				Methods: []ir.Method{{
+					Name: "GetKeptV1", InputFullName: "example.KeptReq", OutputFullName: "example.KeptResp",
+				}, {
+					Name: "GetSharedV1", InputFullName: "example.SharedMsg", OutputFullName: "example.KeptResp",
+				}},
+			},
+			{
+				Name: "OtherService",
+				Methods: []ir.Method{{
+					Name: "GetOtherV1", InputFullName: "example.OtherReq", OutputFullName: "example.OtherResp",
+				}},
+			},
+		},
+	}
+
+	outputs, err := Generator{}.Generate([]ir.File{file}, generate.Options{
+		GoOut: "gen/go", GoClient: true, GoServer: false, GoClientService: "KeptService",
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var model string
+	for _, output := range outputs {
+		if output.Path == "gen/go/model.gen.go" {
+			model = string(output.Content)
+		}
+	}
+	if model == "" {
+		t.Fatalf("missing model.gen.go in outputs")
+	}
+
+	mustHave := []string{
+		"type KeptReq struct",       // client service request
+		"type KeptNested struct",    // transitively reachable from KeptReq
+		"type KeptResp struct",      // client service response
+		"type SharedMsg struct",     // used by KeptService (and OtherService)
+		"type SharedEnum int32",     // enum used by KeptReq
+		"type StandaloneMsg struct", // not used by any RPC -> kept
+		"type StandaloneEnum int32", // reachable only from StandaloneMsg
+	}
+	for _, want := range mustHave {
+		if !strings.Contains(model, want) {
+			t.Errorf("expected model.gen.go to contain %q\n%s", want, model)
+		}
+	}
+
+	mustDrop := []string{
+		"type OtherReq struct",
+		"type OtherResp struct",
+		"type OtherEnum int32",
+	}
+	for _, notWant := range mustDrop {
+		if strings.Contains(model, notWant) {
+			t.Errorf("expected model.gen.go NOT to contain %q\n%s", notWant, model)
+		}
 	}
 }
 

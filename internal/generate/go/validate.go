@@ -10,12 +10,15 @@ import (
 	"github.com/jptrs93/cleanproto/internal/ir"
 )
 
-func buildGoValidateFile(file ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, needs map[string]bool, pkg string) ([]byte, error) {
+func buildGoValidateFile(file ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, needs map[string]bool, pkg string, keepMsgs map[string]bool) ([]byte, error) {
 	if len(needs) == 0 {
 		return nil, nil
 	}
 	hasAny := false
 	for _, msg := range file.Messages {
+		if keepMsgs != nil && !keepMsgs[msg.FullName] {
+			continue
+		}
 		if needs[msg.FullName] {
 			hasAny = true
 			break
@@ -32,6 +35,9 @@ func buildGoValidateFile(file ir.File, msgIndex map[string]ir.Message, enumIndex
 	}
 	var bodies strings.Builder
 	for _, msg := range file.Messages {
+		if keepMsgs != nil && !keepMsgs[msg.FullName] {
+			continue
+		}
 		if !needs[msg.FullName] {
 			continue
 		}

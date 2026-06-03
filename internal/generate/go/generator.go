@@ -28,6 +28,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	msgIndex := indexMessages(files)
 	enumIndex := indexEnums(files)
 	validateNeeds := computeValidateNeeds(msgIndex)
+	keepMsgs, keepEnums := computeGoKeepTypes(files, msgIndex, enumIndex, options)
 	var outputs []generate.OutputFile
 	var utilPkg string
 	var utilDir string
@@ -46,7 +47,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			utilPkg = pkg
 			utilDir = goOut
 		}
-		data, err := buildGoFileData(file, msgIndex, enumIndex, pkg, options.GoJSONTags)
+		data, err := buildGoFileData(file, msgIndex, enumIndex, pkg, options.GoJSONTags, keepMsgs, keepEnums)
 		if err != nil {
 			return nil, err
 		}
@@ -59,7 +60,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 			Path:    outPath,
 			Content: buf.Bytes(),
 		})
-		auditContent, err := buildGoAuditFile(file, msgIndex, enumIndex, pkg, options.GoJSONTags)
+		auditContent, err := buildGoAuditFile(file, msgIndex, enumIndex, pkg, options.GoJSONTags, keepMsgs)
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +70,7 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 				Content: auditContent,
 			})
 		}
-		validateContent, err := buildGoValidateFile(file, msgIndex, enumIndex, validateNeeds, pkg)
+		validateContent, err := buildGoValidateFile(file, msgIndex, enumIndex, validateNeeds, pkg, keepMsgs)
 		if err != nil {
 			return nil, err
 		}
@@ -1474,9 +1475,12 @@ type goDecodeCase struct {
 	Lines  []string
 }
 
-func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, pkg string, goJSONTags string) (goFileData, error) {
+func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, pkg string, goJSONTags string, keepMsgs, keepEnums map[string]bool) (goFileData, error) {
 	data := goFileData{Package: pkg}
 	for _, enum := range file.Enums {
+		if keepEnums != nil && !keepEnums[enum.FullName] {
+			continue
+		}
 		goEnum := goEnum{Name: enum.Name}
 		for _, value := range enum.Values {
 			goEnum.Values = append(goEnum.Values, goEnumValue{
@@ -1490,6 +1494,9 @@ func buildGoFileData(file ir.File, msgIndex map[string]ir.Message, enumIndex map
 	var usesUUID bool
 	isZeroNeeds := computeGoIsZeroNeeds(msgIndex)
 	for _, msg := range file.Messages {
+		if keepMsgs != nil && !keepMsgs[msg.FullName] {
+			continue
+		}
 		goMsg, uuidNeeded, timeNeeded, err := buildGoMessage(msg, msgIndex, enumIndex, goJSONTags, isZeroNeeds[msg.FullName])
 		if err != nil {
 			return goFileData{}, err
@@ -3059,6 +3066,130 @@ func mustGoSliceElemType(field ir.Field, msgIndex map[string]ir.Message) string 
 	return name
 }
 
+// goTypeClosure returns the set of message and enum full names transitively
+// reachable from the given seed messages/enums by following visible message
+// fields (including map values and enum references). Timestamp, duration and
+// cp.go_type-overridden fields do not reference a generated type and are
+// therefore not traversed.
+func goTypeClosure(seedMsgs, seedEnums []string, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum) (map[string]bool, map[string]bool) {
+	msgs := make(map[string]bool)
+	enums := make(map[string]bool)
+	var queue []string
+	addMsg := func(name string) {
+		if name == "" || msgs[name] {
+			return
+		}
+		if _, ok := msgIndex[name]; !ok {
+			return
+		}
+		msgs[name] = true
+		queue = append(queue, name)
+	}
+	addEnum := func(name string) {
+		if name == "" || enums[name] {
+			return
+		}
+		if _, ok := enumIndex[name]; !ok {
+			return
+		}
+		enums[name] = true
+	}
+	for _, n := range seedMsgs {
+		addMsg(n)
+	}
+	for _, n := range seedEnums {
+		addEnum(n)
+	}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		msg := msgIndex[name]
+		for _, field := range goVisibleFields(msg.Fields) {
+			if field.IsMap {
+				if field.MapValueKind == ir.KindMessage {
+					addMsg(field.MapValueMessage)
+				} else if field.MapValueKind == ir.KindEnum {
+					addEnum(field.MapValueEnum)
+				}
+				continue
+			}
+			switch field.Kind {
+			case ir.KindMessage:
+				if !field.IsTimestamp && !field.IsDuration && field.GoType == "" {
+					addMsg(field.MessageFullName)
+				}
+			case ir.KindEnum:
+				if field.GoType == "" {
+					addEnum(field.EnumFullName)
+				}
+			}
+		}
+	}
+	return msgs, enums
+}
+
+// computeGoKeepTypes returns the set of message and enum full names that should
+// be generated when -go.client.service narrows generation to a single service.
+//
+// A type is kept when it is reachable from a generated service surface or when
+// it is not reachable from any service at all (a standalone type that is not
+// part of any RPC). Concretely the kept set is the closure of:
+//   - the request/response messages of the filtered client service (if a Go
+//     client is generated),
+//   - the request/response messages of every service (if a Go server mux is
+//     generated, since the mux still references all of them), and
+//   - every message/enum that no service references.
+//
+// Returned maps are nil when no filtering applies (keep everything). Because
+// the server mux currently covers every service, pruning only takes effect when
+// the server is disabled (-go.server=false); otherwise the kept set naturally
+// covers all service types and nothing is dropped.
+func computeGoKeepTypes(files []ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, options generate.Options) (map[string]bool, map[string]bool) {
+	if options.GoClientService == "" {
+		return nil, nil
+	}
+	var allSvcSeeds []string
+	for _, f := range files {
+		for _, svc := range f.Services {
+			for _, m := range svc.Methods {
+				allSvcSeeds = append(allSvcSeeds, m.InputFullName, m.OutputFullName)
+			}
+		}
+	}
+	anyMsgs, anyEnums := goTypeClosure(allSvcSeeds, nil, msgIndex, enumIndex)
+
+	var seedMsgs []string
+	if options.GoClient {
+		for _, f := range files {
+			for _, svc := range f.Services {
+				if svc.Name != options.GoClientService {
+					continue
+				}
+				for _, m := range svc.Methods {
+					seedMsgs = append(seedMsgs, m.InputFullName, m.OutputFullName)
+				}
+			}
+		}
+	}
+	if options.GoServer {
+		seedMsgs = append(seedMsgs, allSvcSeeds...)
+	}
+	var seedEnums []string
+	for _, f := range files {
+		for _, msg := range f.Messages {
+			if !anyMsgs[msg.FullName] {
+				seedMsgs = append(seedMsgs, msg.FullName)
+			}
+		}
+		for _, enum := range f.Enums {
+			if !anyEnums[enum.FullName] {
+				seedEnums = append(seedEnums, enum.FullName)
+			}
+		}
+	}
+	return goTypeClosure(seedMsgs, seedEnums, msgIndex, enumIndex)
+}
+
 func computeAuditMessages(file ir.File, msgIndex map[string]ir.Message) map[string]bool {
 	reachable := make(map[string]bool)
 	var queue []string
@@ -3202,13 +3333,16 @@ func buildToAuditLines(field ir.Field, msgIndex map[string]ir.Message, needs map
 	return []string{fmt.Sprintf("out.%s = m.%s", name, name)}, nil
 }
 
-func buildGoAuditFile(file ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, pkg string, goJSONTags string) ([]byte, error) {
+func buildGoAuditFile(file ir.File, msgIndex map[string]ir.Message, enumIndex map[string]ir.Enum, pkg string, goJSONTags string, keepMsgs map[string]bool) ([]byte, error) {
 	needs := computeAuditMessages(file, msgIndex)
 	if len(needs) == 0 {
 		return nil, nil
 	}
 	var auditMsgs []ir.Message
 	for _, msg := range file.Messages {
+		if keepMsgs != nil && !keepMsgs[msg.FullName] {
+			continue
+		}
 		if needs[msg.FullName] {
 			auditMsgs = append(auditMsgs, msg)
 		}
