@@ -4,8 +4,7 @@
 {{.}}
 
 {{- end}}
-import protobufjsm from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
+import { Reader, Writer } from './runtime.js';
 
 const WIRE = {
     VARINT: 0,
@@ -31,6 +30,9 @@ function readInt64(reader, method) {
     const value = reader[method]();
     if (typeof value === "number") {
         return value;
+    }
+    if (typeof value === "bigint") {
+        return Number(value);
     }
     return value.toNumber();
 }

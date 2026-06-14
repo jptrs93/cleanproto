@@ -103,11 +103,13 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	}
 	msgIndex := indexMessages(files)
 	var outputs []generate.OutputFile
+	jsEmitted := false
 	for _, file := range files {
 		jsOut := options.JsOut
 		if jsOut == "" {
 			continue
 		}
+		jsEmitted = true
 		data, err := buildJSFileData(file, msgIndex)
 		if err != nil {
 			return nil, err
@@ -131,6 +133,12 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 				Content: []byte(capi),
 			})
 		}
+	}
+	if jsEmitted {
+		outputs = append(outputs, generate.OutputFile{
+			Path:    filepath.Join(options.JsOut, "runtime.js"),
+			Content: []byte(templates.JSRuntimeSource),
+		})
 	}
 	return outputs, nil
 }

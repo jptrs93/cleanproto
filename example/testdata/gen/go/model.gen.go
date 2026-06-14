@@ -3,44 +3,26 @@
 package example
 
 import (
-	"google.golang.org/protobuf/encoding/protowire"
-)
-
-type BookStatus int32
-
-const (
-	BookStatus_BOOK_STATUS_UNSPECIFIED BookStatus = 0
-	BookStatus_BOOK_STATUS_AVAILABLE   BookStatus = 1
-	BookStatus_BOOK_STATUS_CHECKED_OUT BookStatus = 2
-	BookStatus_BOOK_STATUS_LOST        BookStatus = 3
+	"github.com/google/uuid"
+	"time"
 )
 
 type Book struct {
-	ID        string     `json:"id,omitempty"`
-	Title     string     `json:"title,omitempty"`
-	Author    string     `json:"author,omitempty"`
-	PageCount int32      `json:"page_count"`
-	Genre     string     `json:"genre,omitempty"`
-	Status    BookStatus `json:"status"`
-	Tags      []string   `json:"tags,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 func (m *Book) Encode() []byte {
 	var b []byte
 	b = AppendStringField(b, m.ID, 1)
 	b = AppendStringField(b, m.Title, 2)
-	b = AppendStringField(b, m.Author, 3)
-	b = AppendInt32Field(b, m.PageCount, 4)
-	b = AppendStringField(b, m.Genre, 5)
-	b = AppendInt32Field(b, int32(m.Status), 6)
-	b = AppendRepeated(b, m.Tags, AppendFieldDecorator(AppendStringField, 7))
 	return b
 }
 
 func DecodeBook(b []byte) (*Book, error) {
 	var m Book
-	var num protowire.Number
-	var typ protowire.Type
+	var num Number
+	var typ Type
 	var err error
 	for len(b) > 0 {
 		b, num, typ, err = ConsumeTag(b)
@@ -52,24 +34,6 @@ func DecodeBook(b []byte) (*Book, error) {
 			b, m.ID, err = ConsumeString(b, typ)
 		case 2:
 			b, m.Title, err = ConsumeString(b, typ)
-		case 3:
-			b, m.Author, err = ConsumeString(b, typ)
-		case 4:
-			b, m.PageCount, err = ConsumeVarInt32(b, typ)
-		case 5:
-			b, m.Genre, err = ConsumeString(b, typ)
-		case 6:
-			var raw int32
-			b, raw, err = ConsumeVarInt32(b, typ)
-			if err == nil {
-				m.Status = BookStatus(raw)
-			}
-		case 7:
-			var item string
-			b, item, err = ConsumeRepeatedElement(b, typ, ConsumeString)
-			if err == nil {
-				m.Tags = append(m.Tags, item)
-			}
 		default:
 			b, err = SkipFieldValue(b, num, typ)
 		}
@@ -81,29 +45,38 @@ func DecodeBook(b []byte) (*Book, error) {
 }
 
 type Library struct {
-	ID    string  `json:"id,omitempty"`
-	Name  string  `json:"name,omitempty"`
-	Books []*Book `json:"books,omitempty"`
+	Books       map[string]*Book `json:"books,omitempty"`
+	Counts      map[int32]int64  `json:"counts,omitempty"`
+	Tags        []int32          `json:"tags,omitempty"`
+	Names       []string         `json:"names,omitempty"`
+	Featured    []Book           `json:"featured,omitempty"`
+	Recommended []*Book          `json:"recommended,omitempty"`
 }
 
 func (m *Library) Encode() []byte {
 	var b []byte
-	b = AppendStringField(b, m.ID, 1)
-	b = AppendStringField(b, m.Name, 2)
-	for _, item := range m.Books {
+	b = AppendMap(b, m.Books, 1, AppendFieldDecorator(AppendStringField, 1), AppendMessageFieldDecorator[*Book](2))
+	b = AppendMap(b, m.Counts, 2, AppendFieldDecorator(AppendInt32Field, 1), AppendFieldDecorator(AppendInt64Field, 2))
+	b = AppendRepeatedCompact(b, m.Tags, 3, AppendCompactDecorator(AppendInt32Compact))
+	b = AppendRepeated(b, m.Names, AppendFieldDecorator(AppendStringField, 4))
+	for _, item := range m.Featured {
+		b = AppendTag(b, 5, BytesType)
+		b = AppendBytes(b, item.Encode())
+	}
+	for _, item := range m.Recommended {
 		if item == nil {
 			continue
 		}
-		b = protowire.AppendTag(b, 3, protowire.BytesType)
-		b = protowire.AppendBytes(b, item.Encode())
+		b = AppendTag(b, 6, BytesType)
+		b = AppendBytes(b, item.Encode())
 	}
 	return b
 }
 
 func DecodeLibrary(b []byte) (*Library, error) {
 	var m Library
-	var num protowire.Number
-	var typ protowire.Type
+	var num Number
+	var typ Type
 	var err error
 	var msgBytes []byte
 	for len(b) > 0 {
@@ -113,16 +86,39 @@ func DecodeLibrary(b []byte) (*Library, error) {
 		}
 		switch num {
 		case 1:
-			b, m.ID, err = ConsumeString(b, typ)
+			if m.Books == nil {
+				m.Books = make(map[string]*Book)
+			}
+			b, err = ConsumeMapEntry(b, typ, m.Books, ConsumeString, ConsumeMessageDecorator(DecodeBook))
 		case 2:
-			b, m.Name, err = ConsumeString(b, typ)
+			if m.Counts == nil {
+				m.Counts = make(map[int32]int64)
+			}
+			b, err = ConsumeMapEntry(b, typ, m.Counts, ConsumeVarInt32, ConsumeVarInt64)
 		case 3:
+			b, m.Tags, err = ConsumeRepeatedCompact(b, typ, VarintType, ConsumeVarInt32)
+		case 4:
+			var item string
+			b, item, err = ConsumeRepeatedElement(b, typ, ConsumeString)
+			if err == nil {
+				m.Names = append(m.Names, item)
+			}
+		case 5:
 			b, msgBytes, err = ConsumeMessage(b, typ)
 			if err == nil {
 				var item *Book
 				item, err = DecodeBook(msgBytes)
 				if err == nil {
-					m.Books = append(m.Books, item)
+					m.Featured = append(m.Featured, *item)
+				}
+			}
+		case 6:
+			b, msgBytes, err = ConsumeMessage(b, typ)
+			if err == nil {
+				var item *Book
+				item, err = DecodeBook(msgBytes)
+				if err == nil {
+					m.Recommended = append(m.Recommended, item)
 				}
 			}
 		default:
@@ -135,61 +131,85 @@ func DecodeLibrary(b []byte) (*Library, error) {
 	return &m, nil
 }
 
-type GetBookReq struct {
-	ID string `json:"id,omitempty"`
+type NativeTypeCoverage struct {
+	GoTimeFromInt32          time.Time     `json:"go_time_from_int32"`
+	GoTimeFromInt64          time.Time     `json:"go_time_from_int64"`
+	GoTimeFromTimestamp      time.Time     `json:"go_time_from_timestamp"`
+	GoDurationFromInt32      time.Duration `json:"go_duration_from_int32"`
+	GoDurationFromInt64      time.Duration `json:"go_duration_from_int64"`
+	GoDurationFromDuration   time.Duration `json:"go_duration_from_duration"`
+	GoUuidFromBytes          uuid.UUID     `json:"go_uuid_from_bytes"`
+	JsNumberFromInt32        int32         `json:"js_number_from_int32"`
+	JsBigintFromInt32        int32         `json:"js_bigint_from_int32"`
+	JsNumberFromInt64        int64         `json:"js_number_from_int64"`
+	JsBigintFromInt64        int64         `json:"js_bigint_from_int64"`
+	JsNumberFromTimestamp    time.Time     `json:"js_number_from_timestamp"`
+	JsBigintFromTimestamp    time.Time     `json:"js_bigint_from_timestamp"`
+	JsNumberFromDuration     time.Duration `json:"js_number_from_duration"`
+	JsBigintFromDuration     time.Duration `json:"js_bigint_from_duration"`
+	GoEncodeFalse            int32         `json:"go_encode_false"`
+	JsEncodeFalse            int32         `json:"js_encode_false"`
+	JsIgnoreTrue             int32         `json:"js_ignore_true"`
+	JsDateFromInt32          int32         `json:"js_date_from_int32"`
+	JsDateFromInt64          int64         `json:"js_date_from_int64"`
+	JsDateFromTimestamp      time.Time     `json:"js_date_from_timestamp"`
+	TsDefaultBigintFromInt64 int64         `json:"ts_default_bigint_from_int64"`
+	TsNumberFromInt64        int64         `json:"ts_number_from_int64"`
+	TsBigintFromInt32        int32         `json:"ts_bigint_from_int32"`
+	TsDateFromTimestamp      time.Time     `json:"ts_date_from_timestamp"`
+	TsEncodeFalse            int32         `json:"ts_encode_false"`
+	TsIgnoreTrue             int32         `json:"ts_ignore_true"`
+	JsonIgnoreTrue           int32         `json:"-"`
 }
 
-func (m *GetBookReq) Encode() []byte {
+func (m *NativeTypeCoverage) Encode() []byte {
 	var b []byte
-	b = AppendStringField(b, m.ID, 1)
-	return b
-}
-
-func DecodeGetBookReq(b []byte) (*GetBookReq, error) {
-	var m GetBookReq
-	var num protowire.Number
-	var typ protowire.Type
-	var err error
-	for len(b) > 0 {
-		b, num, typ, err = ConsumeTag(b)
-		if err != nil {
-			return nil, err
-		}
-		switch num {
-		case 1:
-			b, m.ID, err = ConsumeString(b, typ)
-		default:
-			b, err = SkipFieldValue(b, num, typ)
-		}
-		if err != nil {
-			return nil, err
-		}
+	b = AppendInt32FromTime(b, m.GoTimeFromInt32, 1)
+	b = AppendInt64FromTime(b, m.GoTimeFromInt64, 2)
+	b = AppendTimestampFromTime(b, m.GoTimeFromTimestamp, 3)
+	b = AppendInt32FromDuration(b, m.GoDurationFromInt32, 4)
+	b = AppendInt64FromDuration(b, m.GoDurationFromInt64, 5)
+	b = AppendDurationFromDuration(b, m.GoDurationFromDuration, 6)
+	b = AppendBytesFromUUID(b, m.GoUuidFromBytes, 7)
+	b = AppendInt32Field(b, m.JsNumberFromInt32, 8)
+	b = AppendInt32Field(b, m.JsBigintFromInt32, 9)
+	b = AppendInt64Field(b, m.JsNumberFromInt64, 10)
+	b = AppendInt64Field(b, m.JsBigintFromInt64, 11)
+	if !m.JsNumberFromTimestamp.IsZero() {
+		b = AppendBytesField(b, EncodeTimestamp(m.JsNumberFromTimestamp), 12)
 	}
-	return &m, nil
-}
-
-type CheckoutBookReq struct {
-	LibraryID     string            `json:"library_id,omitempty"`
-	BookID        string            `json:"book_id,omitempty"`
-	BorrowerEmail string            `json:"borrower_email,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	Signature     []byte            `json:"signature"`
-}
-
-func (m *CheckoutBookReq) Encode() []byte {
-	var b []byte
-	b = AppendStringField(b, m.LibraryID, 1)
-	b = AppendStringField(b, m.BookID, 2)
-	b = AppendStringField(b, m.BorrowerEmail, 3)
-	b = AppendMap(b, m.Metadata, 4, AppendFieldDecorator(AppendStringField, 1), AppendFieldDecorator(AppendStringField, 2))
-	b = AppendBytesField(b, m.Signature, 5)
+	if !m.JsBigintFromTimestamp.IsZero() {
+		b = AppendBytesField(b, EncodeTimestamp(m.JsBigintFromTimestamp), 13)
+	}
+	if m.JsNumberFromDuration != 0 {
+		b = AppendBytesField(b, EncodeDuration(m.JsNumberFromDuration), 14)
+	}
+	if m.JsBigintFromDuration != 0 {
+		b = AppendBytesField(b, EncodeDuration(m.JsBigintFromDuration), 15)
+	}
+	b = AppendInt32Field(b, m.JsEncodeFalse, 18)
+	b = AppendInt32Field(b, m.JsIgnoreTrue, 19)
+	b = AppendInt32Field(b, m.JsDateFromInt32, 20)
+	b = AppendInt64Field(b, m.JsDateFromInt64, 21)
+	if !m.JsDateFromTimestamp.IsZero() {
+		b = AppendBytesField(b, EncodeTimestamp(m.JsDateFromTimestamp), 22)
+	}
+	b = AppendInt64Field(b, m.TsDefaultBigintFromInt64, 23)
+	b = AppendInt64Field(b, m.TsNumberFromInt64, 24)
+	b = AppendInt32Field(b, m.TsBigintFromInt32, 25)
+	if !m.TsDateFromTimestamp.IsZero() {
+		b = AppendBytesField(b, EncodeTimestamp(m.TsDateFromTimestamp), 26)
+	}
+	b = AppendInt32Field(b, m.TsEncodeFalse, 27)
+	b = AppendInt32Field(b, m.TsIgnoreTrue, 28)
+	b = AppendInt32Field(b, m.JsonIgnoreTrue, 29)
 	return b
 }
 
-func DecodeCheckoutBookReq(b []byte) (*CheckoutBookReq, error) {
-	var m CheckoutBookReq
-	var num protowire.Number
-	var typ protowire.Type
+func DecodeNativeTypeCoverage(b []byte) (*NativeTypeCoverage, error) {
+	var m NativeTypeCoverage
+	var num Number
+	var typ Type
 	var err error
 	for len(b) > 0 {
 		b, num, typ, err = ConsumeTag(b)
@@ -198,18 +218,61 @@ func DecodeCheckoutBookReq(b []byte) (*CheckoutBookReq, error) {
 		}
 		switch num {
 		case 1:
-			b, m.LibraryID, err = ConsumeString(b, typ)
+			b, m.GoTimeFromInt32, err = ConsumeTimeFromInt32(b, typ)
 		case 2:
-			b, m.BookID, err = ConsumeString(b, typ)
+			b, m.GoTimeFromInt64, err = ConsumeTimeFromInt64(b, typ)
 		case 3:
-			b, m.BorrowerEmail, err = ConsumeString(b, typ)
+			b, m.GoTimeFromTimestamp, err = ConsumeTimeFromTimestamp(b, typ)
 		case 4:
-			if m.Metadata == nil {
-				m.Metadata = make(map[string]string)
-			}
-			b, err = ConsumeMapEntry(b, typ, m.Metadata, ConsumeString, ConsumeString)
+			b, m.GoDurationFromInt32, err = ConsumeDurationFromInt32(b, typ)
 		case 5:
-			b, m.Signature, err = ConsumeBytesCopy(b, typ)
+			b, m.GoDurationFromInt64, err = ConsumeDurationFromInt64(b, typ)
+		case 6:
+			b, m.GoDurationFromDuration, err = ConsumeDurationFromDuration(b, typ)
+		case 7:
+			b, m.GoUuidFromBytes, err = ConsumeUUIDFromBytes(b, typ)
+		case 8:
+			b, m.JsNumberFromInt32, err = ConsumeVarInt32(b, typ)
+		case 9:
+			b, m.JsBigintFromInt32, err = ConsumeVarInt32(b, typ)
+		case 10:
+			b, m.JsNumberFromInt64, err = ConsumeVarInt64(b, typ)
+		case 11:
+			b, m.JsBigintFromInt64, err = ConsumeVarInt64(b, typ)
+		case 12:
+			b, m.JsNumberFromTimestamp, err = ConsumeTimeFromTimestamp(b, typ)
+		case 13:
+			b, m.JsBigintFromTimestamp, err = ConsumeTimeFromTimestamp(b, typ)
+		case 14:
+			b, m.JsNumberFromDuration, err = ConsumeDuration(b, typ)
+		case 15:
+			b, m.JsBigintFromDuration, err = ConsumeDuration(b, typ)
+		case 16:
+			b, m.GoEncodeFalse, err = ConsumeVarInt32(b, typ)
+		case 18:
+			b, m.JsEncodeFalse, err = ConsumeVarInt32(b, typ)
+		case 19:
+			b, m.JsIgnoreTrue, err = ConsumeVarInt32(b, typ)
+		case 20:
+			b, m.JsDateFromInt32, err = ConsumeVarInt32(b, typ)
+		case 21:
+			b, m.JsDateFromInt64, err = ConsumeVarInt64(b, typ)
+		case 22:
+			b, m.JsDateFromTimestamp, err = ConsumeTimeFromTimestamp(b, typ)
+		case 23:
+			b, m.TsDefaultBigintFromInt64, err = ConsumeVarInt64(b, typ)
+		case 24:
+			b, m.TsNumberFromInt64, err = ConsumeVarInt64(b, typ)
+		case 25:
+			b, m.TsBigintFromInt32, err = ConsumeVarInt32(b, typ)
+		case 26:
+			b, m.TsDateFromTimestamp, err = ConsumeTimeFromTimestamp(b, typ)
+		case 27:
+			b, m.TsEncodeFalse, err = ConsumeVarInt32(b, typ)
+		case 28:
+			b, m.TsIgnoreTrue, err = ConsumeVarInt32(b, typ)
+		case 29:
+			b, m.JsonIgnoreTrue, err = ConsumeVarInt32(b, typ)
 		default:
 			b, err = SkipFieldValue(b, num, typ)
 		}
@@ -235,8 +298,8 @@ func (m *ApiErr) Encode() []byte {
 
 func DecodeApiErr(b []byte) (*ApiErr, error) {
 	var m ApiErr
-	var num protowire.Number
-	var typ protowire.Type
+	var num Number
+	var typ Type
 	var err error
 	for len(b) > 0 {
 		b, num, typ, err = ConsumeTag(b)

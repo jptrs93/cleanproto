@@ -2,11 +2,13 @@
 
 package {{.Package}}
 
+{{if .Imports}}
 import (
 {{- range .Imports}}
     "{{.}}"
 {{- end}}
 )
+{{end}}
 
 {{range .Enums}}
 type {{.Name}} int32
@@ -43,8 +45,8 @@ func (m *{{.Name}}) Encode() []byte {
 
 func Decode{{.Name}}(b []byte) (*{{.Name}}, error) {
     var m {{.Name}}
-    var num protowire.Number
-    var typ protowire.Type
+    var num Number
+    var typ Type
     var err error
 {{- if .NeedsMsgBytes}}
     var msgBytes []byte

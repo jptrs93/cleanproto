@@ -34,7 +34,7 @@ cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out
 Positional args: one or more `.proto` files to generate.
 
 > [!IMPORTANT]
-> Go output relies on `google.golang.org/protobuf/encoding/protowire`, and JavaScript output on `protobufjs/minimal` — you must add these dependencies to your project. TypeScript output is self-contained: it emits a `runtime.ts` (a minimal protobuf reader/writer) alongside `model.ts` and has no external runtime dependency.
+> Go, JavaScript, and TypeScript output are self-contained for protobuf wire encoding. Go emits a `util.gen.go`, JS emits a `runtime.js`, and TS emits a `runtime.ts` (minimal protobuf readers/writers) alongside `model.*`, with no external protobuf runtime dependency.
 
 ### Native type support
 
@@ -131,7 +131,6 @@ package demo
 
 import (
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/encoding/protowire"
 	"time"
 )
 
@@ -157,8 +156,8 @@ func (m *AuditEvent) Encode() []byte {
 
 func DecodeAuditEvent(b []byte) (*AuditEvent, error) {
 	var m AuditEvent
-	var num protowire.Number
-	var typ protowire.Type
+	var num Number
+	var typ Type
 	var err error
 	for len(b) > 0 {
 		b, num, typ, err = ConsumeTag(b)
@@ -207,8 +206,7 @@ func DecodeAuditEvent(b []byte) (*AuditEvent, error) {
  * @property {string} displayErr
  * @property {string} internalErr
  */
-import protobufjsm from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
+import { Reader, Writer } from './runtime.js';
 
 export function writeAuditEvent(message, writer) {
     if (message.occurredAt !== undefined && message.occurredAt !== null && message.occurredAt !== 0) {
@@ -667,8 +665,7 @@ Deployment caveats:
  * @property {string} libraryId
  * @property {string} bookId
  */
-import protobufjsm from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
+import { Reader, Writer } from './runtime.js';
 
 export function encodeGetBookReq(message) {
     const writer = Writer.create();

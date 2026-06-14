@@ -135,7 +135,7 @@ func TestBuildGoFileDataGoValueMessageField(t *testing.T) {
 	if !strings.Contains(encode, "if !m.ValueChild.IsZero() {") {
 		t.Fatalf("expected value message encode to skip zero nested message, got:\n%s", encode)
 	}
-	if !strings.Contains(encode, "b = protowire.AppendBytes(b, m.ValueChild.Encode())") {
+	if !strings.Contains(encode, "b = AppendBytes(b, m.ValueChild.Encode())") {
 		t.Fatalf("expected value message encode to include non-zero nested message, got:\n%s", encode)
 	}
 	if !strings.Contains(encode, "if m.PointerChild != nil {") {

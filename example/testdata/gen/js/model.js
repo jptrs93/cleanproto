@@ -3,29 +3,46 @@
  * @typedef {Object} Book
  * @property {string} id
  * @property {string} title
- * @property {string} author
- * @property {number} pageCount
- * @property {string} genre
- * @property {number} status
- * @property {string[]} tags
  */
 /**
  * @typedef {Object} Library
- * @property {string} id
- * @property {string} name
- * @property {Book[]} books
+ * @property {Object.<string, Book>} books
+ * @property {Object.<string, number>} counts
+ * @property {number[]} tags
+ * @property {string[]} names
+ * @property {Book[]} featured
+ * @property {Book[]} recommended
  */
 /**
- * @typedef {Object} GetBookReq
- * @property {string} id
- */
-/**
- * @typedef {Object} CheckoutBookReq
- * @property {string} libraryId
- * @property {string} bookId
- * @property {string} borrowerEmail
- * @property {Object.<string, string>} metadata
- * @property {Uint8Array} signature
+ * @typedef {Object} NativeTypeCoverage
+ * @property {number} goTimeFromInt32
+ * @property {number} goTimeFromInt64
+ * @property {Date} goTimeFromTimestamp
+ * @property {number} goDurationFromInt32
+ * @property {number} goDurationFromInt64
+ * @property {number} goDurationFromDuration
+ * @property {Uint8Array} goUuidFromBytes
+ * @property {number} jsNumberFromInt32
+ * @property {bigint} jsBigintFromInt32
+ * @property {number} jsNumberFromInt64
+ * @property {bigint} jsBigintFromInt64
+ * @property {number} jsNumberFromTimestamp
+ * @property {bigint} jsBigintFromTimestamp
+ * @property {number} jsNumberFromDuration
+ * @property {bigint} jsBigintFromDuration
+ * @property {number} goEncodeFalse
+ * @property {number} goIgnoreTrue
+ * @property {number} jsEncodeFalse
+ * @property {Date} jsDateFromInt32
+ * @property {Date} jsDateFromInt64
+ * @property {Date} jsDateFromTimestamp
+ * @property {number} tsDefaultBigintFromInt64
+ * @property {number} tsNumberFromInt64
+ * @property {number} tsBigintFromInt32
+ * @property {Date} tsDateFromTimestamp
+ * @property {number} tsEncodeFalse
+ * @property {number} tsIgnoreTrue
+ * @property {number} jsonIgnoreTrue
  */
 /**
  * @typedef {Object} ApiErr
@@ -33,8 +50,7 @@
  * @property {string} displayErr
  * @property {string} internalErr
  */
-import protobufjsm from 'protobufjs/minimal';
-const { Reader, Writer } = protobufjsm;
+import { Reader, Writer } from './runtime.js';
 
 const WIRE = {
     VARINT: 0,
@@ -57,23 +73,6 @@ export function writeBook(message, writer) {
     if (message.title !== undefined && message.title !== null && message.title !== "") {
         writer.uint32(tag(2, WIRE.LDELIM)).string(message.title);
     }
-    if (message.author !== undefined && message.author !== null && message.author !== "") {
-        writer.uint32(tag(3, WIRE.LDELIM)).string(message.author);
-    }
-    if (message.pageCount !== undefined && message.pageCount !== null && message.pageCount !== 0) {
-        writer.uint32(tag(4, WIRE.VARINT)).int32(message.pageCount);
-    }
-    if (message.genre !== undefined && message.genre !== null && message.genre !== "") {
-        writer.uint32(tag(5, WIRE.LDELIM)).string(message.genre);
-    }
-    if (message.status !== undefined && message.status !== null && message.status !== 0) {
-        writer.uint32(tag(6, WIRE.VARINT)).int32(message.status);
-    }
-    if (message.tags && message.tags.length > 0) {
-        for (const item of message.tags) {
-            writer.uint32(tag(7, WIRE.LDELIM)).string(item);
-        }
-    }
 }
 
 
@@ -95,7 +94,7 @@ export function encodeBook(message) {
  */
 function decodeBookMessage(reader, length) {
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = {id: "", title: "", author: "", pageCount: 0, genre: "", status: 0, tags: [] };
+    const message = {id: "", title: "" };
     while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
@@ -105,26 +104,6 @@ function decodeBookMessage(reader, length) {
             }
             case 2: {
                 message.title = reader.string();
-                break;
-            }
-            case 3: {
-                message.author = reader.string();
-                break;
-            }
-            case 4: {
-                message.pageCount = reader.int32();
-                break;
-            }
-            case 5: {
-                message.genre = reader.string();
-                break;
-            }
-            case 6: {
-                message.status = reader.int32();
-                break;
-            }
-            case 7: {
-                message.tags.push(reader.string());
                 break;
             }
             default:
@@ -151,15 +130,54 @@ export function decodeBook(buffer) {
  * @param {Writer} writer
  */
 export function writeLibrary(message, writer) {
-    if (message.id !== undefined && message.id !== null && message.id !== "") {
-        writer.uint32(tag(1, WIRE.LDELIM)).string(message.id);
+    if (message.books && Object.keys(message.books).length > 0) {
+        for (const [rawKey, value] of Object.entries(message.books)) {
+            const key = rawKey;
+            writer.uint32(tag(1, WIRE.LDELIM)).fork();
+            writer.uint32(tag(1, WIRE.LDELIM)).string(key);
+            if (value) {
+                writer.uint32(tag(2, WIRE.LDELIM)).fork();
+                writeBook(value, writer);
+                writer.ldelim();
+            }
+            writer.ldelim();
+        }
     }
-    if (message.name !== undefined && message.name !== null && message.name !== "") {
-        writer.uint32(tag(2, WIRE.LDELIM)).string(message.name);
+    if (message.counts && Object.keys(message.counts).length > 0) {
+        for (const [rawKey, value] of Object.entries(message.counts)) {
+            const key = Number(rawKey);
+            writer.uint32(tag(2, WIRE.LDELIM)).fork();
+            writer.uint32(tag(1, WIRE.VARINT)).int32(key);
+            if (value !== undefined && value !== null && value !== 0) {
+                writer.uint32(tag(2, WIRE.VARINT)).int64(value);
+            }
+            writer.ldelim();
+        }
     }
-    if (message.books && message.books.length > 0) {
-        for (const item of message.books) {
-            writer.uint32(tag(3, WIRE.LDELIM)).fork();
+    if (message.tags) {
+        const packedWriter = Writer.create();
+        for (const item of message.tags) {
+            packedWriter.int32(item);
+        }
+        if (packedWriter.len > 0) {
+            writer.uint32(tag(3, WIRE.LDELIM)).bytes(packedWriter.finish());
+        }
+    }
+    if (message.names && message.names.length > 0) {
+        for (const item of message.names) {
+            writer.uint32(tag(4, WIRE.LDELIM)).string(item);
+        }
+    }
+    if (message.featured && message.featured.length > 0) {
+        for (const item of message.featured) {
+            writer.uint32(tag(5, WIRE.LDELIM)).fork();
+            writeBook(item, writer);
+            writer.ldelim();
+        }
+    }
+    if (message.recommended && message.recommended.length > 0) {
+        for (const item of message.recommended) {
+            writer.uint32(tag(6, WIRE.LDELIM)).fork();
             writeBook(item, writer);
             writer.ldelim();
         }
@@ -185,20 +203,69 @@ export function encodeLibrary(message) {
  */
 function decodeLibraryMessage(reader, length) {
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = {id: "", name: "", books: [] };
+    const message = {books: {}, counts: {}, tags: [], names: [], featured: [], recommended: [] };
     while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
             case 1: {
-                message.id = reader.string();
+                const end2 = reader.uint32() + reader.pos;
+                let key = "";
+                let value = undefined;
+                while (reader.pos < end2) {
+                    const tag2 = reader.uint32();
+                    switch (tag2 >>> 3) {
+                        case 1:
+                            key = reader.string();
+                            break;
+                        case 2:
+                            value = decodeBookMessage(reader, reader.uint32());
+                            break;
+                        default:
+                            reader.skipType(tag2 & 7);
+                    }
+                }
+                if (!message.books) { message.books = {}; }
+                message.books[String(key)] = value;
                 break;
             }
             case 2: {
-                message.name = reader.string();
+                const end2 = reader.uint32() + reader.pos;
+                let key = 0;
+                let value = 0;
+                while (reader.pos < end2) {
+                    const tag2 = reader.uint32();
+                    switch (tag2 >>> 3) {
+                        case 1:
+                            key = reader.int32();
+                            break;
+                        case 2:
+                            value = readInt64(reader, "int64");
+                            break;
+                        default:
+                            reader.skipType(tag2 & 7);
+                    }
+                }
+                if (!message.counts) { message.counts = {}; }
+                message.counts[String(key)] = value;
                 break;
             }
             case 3: {
-                message.books.push(decodeBookMessage(reader, reader.uint32()));
+                const end2 = reader.uint32() + reader.pos;
+                while (reader.pos < end2) {
+                    message.tags.push(reader.int32());
+                }
+                break;
+            }
+            case 4: {
+                message.names.push(reader.string());
+                break;
+            }
+            case 5: {
+                message.featured.push(decodeBookMessage(reader, reader.uint32()));
+                break;
+            }
+            case 6: {
+                message.recommended.push(decodeBookMessage(reader, reader.uint32()));
                 break;
             }
             default:
@@ -221,23 +288,117 @@ export function decodeLibrary(buffer) {
 
 
 /**
- * @param {GetBookReq} message
+ * @param {NativeTypeCoverage} message
  * @param {Writer} writer
  */
-export function writeGetBookReq(message, writer) {
-    if (message.id !== undefined && message.id !== null && message.id !== "") {
-        writer.uint32(tag(1, WIRE.LDELIM)).string(message.id);
+export function writeNativeTypeCoverage(message, writer) {
+    if (message.goTimeFromInt32 !== undefined && message.goTimeFromInt32 !== null && message.goTimeFromInt32 !== 0) {
+        writer.uint32(tag(1, WIRE.VARINT)).int32(message.goTimeFromInt32);
+    }
+    if (message.goTimeFromInt64 !== undefined && message.goTimeFromInt64 !== null && message.goTimeFromInt64 !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int64(message.goTimeFromInt64);
+    }
+    if (message.goTimeFromTimestamp !== undefined && message.goTimeFromTimestamp !== null) {
+        writer.uint32(tag(3, WIRE.LDELIM)).fork();
+        writeTimestamp(message.goTimeFromTimestamp, writer);
+        writer.ldelim();
+    }
+    if (message.goDurationFromInt32 !== undefined && message.goDurationFromInt32 !== null && message.goDurationFromInt32 !== 0) {
+        writer.uint32(tag(4, WIRE.VARINT)).int32(message.goDurationFromInt32);
+    }
+    if (message.goDurationFromInt64 !== undefined && message.goDurationFromInt64 !== null && message.goDurationFromInt64 !== 0) {
+        writer.uint32(tag(5, WIRE.VARINT)).int64(message.goDurationFromInt64);
+    }
+    if (message.goDurationFromDuration !== undefined && message.goDurationFromDuration !== null) {
+        writer.uint32(tag(6, WIRE.LDELIM)).fork();
+        writeDuration(message.goDurationFromDuration, writer);
+        writer.ldelim();
+    }
+    if (message.goUuidFromBytes && message.goUuidFromBytes.length > 0) {
+        writer.uint32(tag(7, WIRE.LDELIM)).bytes(message.goUuidFromBytes);
+    }
+    if (message.jsNumberFromInt32 !== undefined && message.jsNumberFromInt32 !== null && message.jsNumberFromInt32 !== 0) {
+        writer.uint32(tag(8, WIRE.VARINT)).int32(Math.trunc(message.jsNumberFromInt32));
+    }
+    if (message.jsBigintFromInt32 !== undefined && message.jsBigintFromInt32 !== null && message.jsBigintFromInt32 !== 0n) {
+        writer.uint32(tag(9, WIRE.VARINT)).int32(Number(message.jsBigintFromInt32));
+    }
+    if (message.jsNumberFromInt64 !== undefined && message.jsNumberFromInt64 !== null && message.jsNumberFromInt64 !== 0) {
+        writer.uint32(tag(10, WIRE.VARINT)).int64(Math.trunc(message.jsNumberFromInt64));
+    }
+    if (message.jsBigintFromInt64 !== undefined && message.jsBigintFromInt64 !== null && message.jsBigintFromInt64 !== 0n) {
+        writer.uint32(tag(11, WIRE.VARINT)).int64(message.jsBigintFromInt64.toString());
+    }
+    if (message.jsNumberFromTimestamp !== undefined && message.jsNumberFromTimestamp !== null && message.jsNumberFromTimestamp !== 0) {
+        writer.uint32(tag(12, WIRE.LDELIM)).fork();
+        writeTimestampFromMillis(message.jsNumberFromTimestamp, writer);
+        writer.ldelim();
+    }
+    if (message.jsBigintFromTimestamp !== undefined && message.jsBigintFromTimestamp !== null && message.jsBigintFromTimestamp !== 0n) {
+        writer.uint32(tag(13, WIRE.LDELIM)).fork();
+        writeTimestampFromBigInt(message.jsBigintFromTimestamp, writer);
+        writer.ldelim();
+    }
+    if (message.jsNumberFromDuration !== undefined && message.jsNumberFromDuration !== null && message.jsNumberFromDuration !== 0) {
+        writer.uint32(tag(14, WIRE.LDELIM)).fork();
+        writeDuration(message.jsNumberFromDuration, writer);
+        writer.ldelim();
+    }
+    if (message.jsBigintFromDuration !== undefined && message.jsBigintFromDuration !== null && message.jsBigintFromDuration !== 0n) {
+        writer.uint32(tag(15, WIRE.LDELIM)).fork();
+        writeDurationFromBigInt(message.jsBigintFromDuration, writer);
+        writer.ldelim();
+    }
+    if (message.goEncodeFalse !== undefined && message.goEncodeFalse !== null && message.goEncodeFalse !== 0) {
+        writer.uint32(tag(16, WIRE.VARINT)).int32(message.goEncodeFalse);
+    }
+    if (message.goIgnoreTrue !== undefined && message.goIgnoreTrue !== null && message.goIgnoreTrue !== 0) {
+        writer.uint32(tag(17, WIRE.VARINT)).int32(message.goIgnoreTrue);
+    }
+    if (message.jsDateFromInt32 instanceof Date && message.jsDateFromInt32.getTime() !== 0) {
+        writer.uint32(tag(20, WIRE.VARINT)).int32(Math.trunc(message.jsDateFromInt32.getTime() / 1000));
+    }
+    if (message.jsDateFromInt64 instanceof Date && message.jsDateFromInt64.getTime() !== 0) {
+        writer.uint32(tag(21, WIRE.VARINT)).int64(Math.trunc(message.jsDateFromInt64.getTime()));
+    }
+    if (message.jsDateFromTimestamp instanceof Date && message.jsDateFromTimestamp.getTime() !== 0) {
+        writer.uint32(tag(22, WIRE.LDELIM)).fork();
+        writeTimestamp(message.jsDateFromTimestamp, writer);
+        writer.ldelim();
+    }
+    if (message.tsDefaultBigintFromInt64 !== undefined && message.tsDefaultBigintFromInt64 !== null && message.tsDefaultBigintFromInt64 !== 0) {
+        writer.uint32(tag(23, WIRE.VARINT)).int64(message.tsDefaultBigintFromInt64);
+    }
+    if (message.tsNumberFromInt64 !== undefined && message.tsNumberFromInt64 !== null && message.tsNumberFromInt64 !== 0) {
+        writer.uint32(tag(24, WIRE.VARINT)).int64(message.tsNumberFromInt64);
+    }
+    if (message.tsBigintFromInt32 !== undefined && message.tsBigintFromInt32 !== null && message.tsBigintFromInt32 !== 0) {
+        writer.uint32(tag(25, WIRE.VARINT)).int32(message.tsBigintFromInt32);
+    }
+    if (message.tsDateFromTimestamp !== undefined && message.tsDateFromTimestamp !== null) {
+        writer.uint32(tag(26, WIRE.LDELIM)).fork();
+        writeTimestamp(message.tsDateFromTimestamp, writer);
+        writer.ldelim();
+    }
+    if (message.tsEncodeFalse !== undefined && message.tsEncodeFalse !== null && message.tsEncodeFalse !== 0) {
+        writer.uint32(tag(27, WIRE.VARINT)).int32(message.tsEncodeFalse);
+    }
+    if (message.tsIgnoreTrue !== undefined && message.tsIgnoreTrue !== null && message.tsIgnoreTrue !== 0) {
+        writer.uint32(tag(28, WIRE.VARINT)).int32(message.tsIgnoreTrue);
+    }
+    if (message.jsonIgnoreTrue !== undefined && message.jsonIgnoreTrue !== null && message.jsonIgnoreTrue !== 0) {
+        writer.uint32(tag(29, WIRE.VARINT)).int32(message.jsonIgnoreTrue);
     }
 }
 
 
 /**
- * @param {GetBookReq} message
+ * @param {NativeTypeCoverage} message
  * @returns {Uint8Array}
  */
-export function encodeGetBookReq(message) {
+export function encodeNativeTypeCoverage(message) {
     const writer = Writer.create();
-    writeGetBookReq(message, writer);
+    writeNativeTypeCoverage(message, writer);
     return writer.finish();
 }
 
@@ -245,125 +406,124 @@ export function encodeGetBookReq(message) {
 /**
  * @param {Reader} reader
  * @param {number} [length]
- * @returns {GetBookReq}
+ * @returns {NativeTypeCoverage}
  */
-function decodeGetBookReqMessage(reader, length) {
+function decodeNativeTypeCoverageMessage(reader, length) {
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = {id: "" };
+    const message = {goTimeFromInt32: 0, goTimeFromInt64: 0, goTimeFromTimestamp: new Date(0), goDurationFromInt32: 0, goDurationFromInt64: 0, goDurationFromDuration: 0, goUuidFromBytes: new Uint8Array(0), jsNumberFromInt32: 0, jsBigintFromInt32: 0n, jsNumberFromInt64: 0, jsBigintFromInt64: 0n, jsNumberFromTimestamp: 0, jsBigintFromTimestamp: 0n, jsNumberFromDuration: 0, jsBigintFromDuration: 0n, goEncodeFalse: 0, goIgnoreTrue: 0, jsEncodeFalse: 0, jsDateFromInt32: new Date(0), jsDateFromInt64: new Date(0), jsDateFromTimestamp: new Date(0), tsDefaultBigintFromInt64: 0, tsNumberFromInt64: 0, tsBigintFromInt32: 0, tsDateFromTimestamp: new Date(0), tsEncodeFalse: 0, tsIgnoreTrue: 0, jsonIgnoreTrue: 0 };
     while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
             case 1: {
-                message.id = reader.string();
-                break;
-            }
-            default:
-                reader.skipType(tag & 7);
-        }
-    }
-    return message;
-}
-
-
-/**
- * @param {ArrayBuffer} buffer
- * @returns {GetBookReq}
- */
-export function decodeGetBookReq(buffer) {
-    const reader = Reader.create(new Uint8Array(buffer));
-    return decodeGetBookReqMessage(reader);
-}
-
-
-
-/**
- * @param {CheckoutBookReq} message
- * @param {Writer} writer
- */
-export function writeCheckoutBookReq(message, writer) {
-    if (message.libraryId !== undefined && message.libraryId !== null && message.libraryId !== "") {
-        writer.uint32(tag(1, WIRE.LDELIM)).string(message.libraryId);
-    }
-    if (message.bookId !== undefined && message.bookId !== null && message.bookId !== "") {
-        writer.uint32(tag(2, WIRE.LDELIM)).string(message.bookId);
-    }
-    if (message.borrowerEmail !== undefined && message.borrowerEmail !== null && message.borrowerEmail !== "") {
-        writer.uint32(tag(3, WIRE.LDELIM)).string(message.borrowerEmail);
-    }
-    if (message.metadata && Object.keys(message.metadata).length > 0) {
-        for (const [rawKey, value] of Object.entries(message.metadata)) {
-            const key = rawKey;
-            writer.uint32(tag(4, WIRE.LDELIM)).fork();
-            writer.uint32(tag(1, WIRE.LDELIM)).string(key);
-            if (value !== undefined && value !== null && value !== "") {
-                writer.uint32(tag(2, WIRE.LDELIM)).string(value);
-            }
-            writer.ldelim();
-        }
-    }
-    if (message.signature && message.signature.length > 0) {
-        writer.uint32(tag(5, WIRE.LDELIM)).bytes(message.signature);
-    }
-}
-
-
-/**
- * @param {CheckoutBookReq} message
- * @returns {Uint8Array}
- */
-export function encodeCheckoutBookReq(message) {
-    const writer = Writer.create();
-    writeCheckoutBookReq(message, writer);
-    return writer.finish();
-}
-
-
-/**
- * @param {Reader} reader
- * @param {number} [length]
- * @returns {CheckoutBookReq}
- */
-function decodeCheckoutBookReqMessage(reader, length) {
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = {libraryId: "", bookId: "", borrowerEmail: "", metadata: {}, signature: new Uint8Array(0) };
-    while (reader.pos < end) {
-        const tag = reader.uint32();
-        switch (tag >>> 3) {
-            case 1: {
-                message.libraryId = reader.string();
+                message.goTimeFromInt32 = reader.int32();
                 break;
             }
             case 2: {
-                message.bookId = reader.string();
+                message.goTimeFromInt64 = readInt64(reader, "int64");
                 break;
             }
             case 3: {
-                message.borrowerEmail = reader.string();
+                message.goTimeFromTimestamp = decodeTimestampMessage(reader, reader.uint32());
                 break;
             }
             case 4: {
-                const end2 = reader.uint32() + reader.pos;
-                let key = "";
-                let value = "";
-                while (reader.pos < end2) {
-                    const tag2 = reader.uint32();
-                    switch (tag2 >>> 3) {
-                        case 1:
-                            key = reader.string();
-                            break;
-                        case 2:
-                            value = reader.string();
-                            break;
-                        default:
-                            reader.skipType(tag2 & 7);
-                    }
-                }
-                if (!message.metadata) { message.metadata = {}; }
-                message.metadata[String(key)] = value;
+                message.goDurationFromInt32 = reader.int32();
                 break;
             }
             case 5: {
-                message.signature = reader.bytes();
+                message.goDurationFromInt64 = readInt64(reader, "int64");
+                break;
+            }
+            case 6: {
+                message.goDurationFromDuration = decodeDurationMessage(reader, reader.uint32());
+                break;
+            }
+            case 7: {
+                message.goUuidFromBytes = reader.bytes();
+                break;
+            }
+            case 8: {
+                message.jsNumberFromInt32 = reader.int32();
+                break;
+            }
+            case 9: {
+                message.jsBigintFromInt32 = BigInt(reader.int32());
+                break;
+            }
+            case 10: {
+                message.jsNumberFromInt64 = readInt64(reader, "int64");
+                break;
+            }
+            case 11: {
+                message.jsBigintFromInt64 = readInt64BigInt(reader, "int64");
+                break;
+            }
+            case 12: {
+                message.jsNumberFromTimestamp = decodeTimestampMillisMessage(reader, reader.uint32());
+                break;
+            }
+            case 13: {
+                message.jsBigintFromTimestamp = decodeTimestampBigIntMessage(reader, reader.uint32());
+                break;
+            }
+            case 14: {
+                message.jsNumberFromDuration = decodeDurationMessage(reader, reader.uint32());
+                break;
+            }
+            case 15: {
+                message.jsBigintFromDuration = decodeDurationBigIntMessage(reader, reader.uint32());
+                break;
+            }
+            case 16: {
+                message.goEncodeFalse = reader.int32();
+                break;
+            }
+            case 17: {
+                message.goIgnoreTrue = reader.int32();
+                break;
+            }
+            case 18: {
+                message.jsEncodeFalse = reader.int32();
+                break;
+            }
+            case 20: {
+                message.jsDateFromInt32 = new Date(reader.int32() * 1000);
+                break;
+            }
+            case 21: {
+                message.jsDateFromInt64 = new Date(readInt64(reader, "int64"));
+                break;
+            }
+            case 22: {
+                message.jsDateFromTimestamp = decodeTimestampMessage(reader, reader.uint32());
+                break;
+            }
+            case 23: {
+                message.tsDefaultBigintFromInt64 = readInt64(reader, "int64");
+                break;
+            }
+            case 24: {
+                message.tsNumberFromInt64 = readInt64(reader, "int64");
+                break;
+            }
+            case 25: {
+                message.tsBigintFromInt32 = reader.int32();
+                break;
+            }
+            case 26: {
+                message.tsDateFromTimestamp = decodeTimestampMessage(reader, reader.uint32());
+                break;
+            }
+            case 27: {
+                message.tsEncodeFalse = reader.int32();
+                break;
+            }
+            case 28: {
+                message.tsIgnoreTrue = reader.int32();
+                break;
+            }
+            case 29: {
+                message.jsonIgnoreTrue = reader.int32();
                 break;
             }
             default:
@@ -376,11 +536,11 @@ function decodeCheckoutBookReqMessage(reader, length) {
 
 /**
  * @param {ArrayBuffer} buffer
- * @returns {CheckoutBookReq}
+ * @returns {NativeTypeCoverage}
  */
-export function decodeCheckoutBookReq(buffer) {
+export function decodeNativeTypeCoverage(buffer) {
     const reader = Reader.create(new Uint8Array(buffer));
-    return decodeCheckoutBookReqMessage(reader);
+    return decodeNativeTypeCoverageMessage(reader);
 }
 
 
@@ -455,3 +615,194 @@ export function decodeApiErr(buffer) {
 
 
 
+function readInt64(reader, method) {
+    const value = reader[method]();
+    if (typeof value === "number") {
+        return value;
+    }
+    if (typeof value === "bigint") {
+        return Number(value);
+    }
+    return value.toNumber();
+}
+function readInt64BigInt(reader, method) {
+    const value = reader[method]();
+    if (typeof value === "number") {
+        return BigInt(Math.trunc(value));
+    }
+    if (typeof value === "bigint") {
+        return value;
+    }
+    return BigInt(value.toString());
+}
+function writeTimestamp(value, writer) {
+    if (!(value instanceof Date)) {
+        return;
+    }
+    const ms = value.getTime();
+    const seconds = Math.floor(ms / 1000);
+    const nanos = Math.floor((ms - (seconds * 1000)) * 1e6);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds);
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeTimestampMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return new Date((seconds * 1000) + Math.floor(nanos / 1e6));
+}
+function writeTimestampFromMillis(value, writer) {
+    if (value === undefined || value === null || value === 0) {
+        return;
+    }
+    const ms = Math.trunc(value);
+    const seconds = Math.floor(ms / 1000);
+    const nanos = Math.floor((ms - (seconds * 1000)) * 1e6);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds);
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeTimestampMillisMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000) + Math.floor(nanos / 1e6);
+}
+
+function writeTimestampFromBigInt(value, writer) {
+    if (value === undefined || value === null || value === 0n) {
+        return;
+    }
+    const ms = value;
+    const seconds = ms / 1000n;
+    const nanos = Number((ms % 1000n) * 1000000n);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds.toString());
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeTimestampBigIntMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0n;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64BigInt(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000n) + (BigInt(nanos) / 1000000n);
+}
+function writeDuration(value, writer) {
+    if (value === undefined || value === null || value === 0) {
+        return;
+    }
+    const totalNanos = Math.trunc(value * 1e6);
+    const seconds = Math.trunc(totalNanos / 1e9);
+    const nanos = totalNanos - (seconds * 1e9);
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds);
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeDurationMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000) + (nanos / 1e6);
+}
+function writeDurationFromBigInt(value, writer) {
+    if (value === undefined || value === null || value === 0n) {
+        return;
+    }
+    const totalNanos = value * 1000000n;
+    const seconds = totalNanos / 1000000000n;
+    const nanos = Number(totalNanos - (seconds * 1000000000n));
+    writer.uint32(tag(1, WIRE.VARINT)).int64(seconds.toString());
+    if (nanos !== 0) {
+        writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
+    }
+}
+
+function decodeDurationBigIntMessage(reader, length) {
+    const end = length === undefined ? reader.len : reader.pos + length;
+    let seconds = 0n;
+    let nanos = 0;
+    while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+            case 1: {
+                seconds = readInt64BigInt(reader, "int64");
+                break;
+            }
+            case 2: {
+                nanos = reader.int32();
+                break;
+            }
+            default:
+                reader.skipType(tag & 7);
+        }
+    }
+    return (seconds * 1000n) + (BigInt(nanos) / 1000000n);
+}
