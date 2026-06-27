@@ -63,6 +63,61 @@ message Parent {
 	}
 }
 
+func TestParseGoTypePackageLocalCustomType(t *testing.T) {
+	const protoSource = `syntax = "proto3";
+
+package demo;
+
+import "options.proto";
+
+option go_package = "demo";
+
+message Parent {
+  int32 status = 1 [(cp.go_type) = "StatusCode"];
+}
+`
+
+	dir := t.TempDir()
+	protoPath := filepath.Join(dir, "demo.proto")
+	if err := os.WriteFile(protoPath, []byte(protoSource), 0o644); err != nil {
+		t.Fatalf("write proto: %v", err)
+	}
+	optionsPath := filepath.Join(dir, "options.proto")
+	if err := os.WriteFile(optionsPath, []byte(optionsProtoSource), 0o644); err != nil {
+		t.Fatalf("write options proto: %v", err)
+	}
+
+	p := Parser{ImportPaths: []string{dir}}
+	files, err := p.Parse(context.Background(), []string{"demo.proto"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	field := files[0].Messages[0].Fields[0]
+	if field.GoType != "StatusCode" {
+		t.Fatalf("expected package-local cp.go_type to be preserved, got %q", field.GoType)
+	}
+}
+
+func TestParseRejectsQualifiedCustomGoType(t *testing.T) {
+	const protoSource = `syntax = "proto3";
+
+package demo;
+
+import "options.proto";
+
+option go_package = "demo";
+
+message Parent {
+  int32 status = 1 [(cp.go_type) = "otherpkg.StatusCode"];
+}
+`
+
+	err := parseTestProto(t, protoSource)
+	if err == nil || !strings.Contains(err.Error(), `unsupported cp.go_type "otherpkg.StatusCode"`) {
+		t.Fatalf("expected qualified cp.go_type validation error, got %v", err)
+	}
+}
+
 func TestParseRejectsInvalidGoValueUsage(t *testing.T) {
 	cases := []struct {
 		name  string

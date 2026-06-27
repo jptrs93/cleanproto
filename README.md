@@ -53,6 +53,7 @@ This generates models where the `timestamp` field has the type `Date` and `time.
 | `cp.go_type = "time.Time"` | `google.protobuf.Timestamp`, `int32`, `int64` |
 | `cp.go_type = "time.Duration"` | `google.protobuf.Duration`, `int32`, `int64` |
 | `cp.go_type = "github.com/google/uuid.UUID"` | `bytes` |
+| `cp.go_type = "StatusCode"` | package-local custom Go types for primitive scalar and `bytes` fields; generated encode/decode casts through the field's normal Go wire type |
 
 #### JavaScript
 

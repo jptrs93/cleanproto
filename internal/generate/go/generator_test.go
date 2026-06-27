@@ -154,6 +154,78 @@ func TestBuildGoFileDataGoValueMessageField(t *testing.T) {
 	}
 }
 
+func TestBuildGoFileDataPackageLocalCustomGoType(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{{
+			Name:     "Custom",
+			FullName: "example.Custom",
+			Fields: []ir.Field{
+				{Name: "status", Number: 1, Kind: ir.KindInt32, GoType: "StatusCode", GoEncode: true},
+				{Name: "status_opt", Number: 2, Kind: ir.KindInt32, GoType: "StatusCode", GoEncode: true, IsOptional: true},
+				{Name: "statuses", Number: 3, Kind: ir.KindInt32, GoType: "StatusCode", GoEncode: true, IsRepeated: true, IsPacked: true},
+			},
+		}},
+	}
+
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "", nil, nil)
+	if err != nil {
+		t.Fatalf("buildGoFileData: %v", err)
+	}
+	if len(data.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(data.Messages))
+	}
+	msg := data.Messages[0]
+	if len(msg.Fields) != 3 {
+		t.Fatalf("expected 3 fields, got %#v", msg.Fields)
+	}
+	if msg.Fields[0].Type != "StatusCode" {
+		t.Fatalf("expected singular custom field type, got %q", msg.Fields[0].Type)
+	}
+	if msg.Fields[1].Type != "*StatusCode" {
+		t.Fatalf("expected optional custom field type, got %q", msg.Fields[1].Type)
+	}
+	if msg.Fields[2].Type != "[]StatusCode" {
+		t.Fatalf("expected repeated custom field type, got %q", msg.Fields[2].Type)
+	}
+
+	encode := strings.Join(msg.EncodeLines, "\n")
+	encodeChecks := []string{
+		"b = AppendInt32Field(b, int32(m.Status), 1)",
+		"if m.StatusOpt != nil {",
+		"b = AppendInt32Field(b, int32(*m.StatusOpt), 2)",
+		"packed = AppendInt32Compact(packed, int32(item))",
+	}
+	for _, check := range encodeChecks {
+		if !strings.Contains(encode, check) {
+			t.Fatalf("expected custom Go type encode to contain %q, got:\n%s", check, encode)
+		}
+	}
+
+	var decode strings.Builder
+	for _, c := range msg.DecodeCases {
+		decode.WriteString(strings.Join(c.Lines, "\n"))
+		decode.WriteString("\n")
+	}
+	decodeChecks := []string{
+		"var raw int32",
+		"m.Status = StatusCode(raw)",
+		"tmp := StatusCode(raw)",
+		"m.StatusOpt = &tmp",
+		"m.Statuses = append(m.Statuses, StatusCode(raw))",
+	}
+	for _, check := range decodeChecks {
+		if !strings.Contains(decode.String(), check) {
+			t.Fatalf("expected custom Go type decode to contain %q, got:\n%s", check, decode.String())
+		}
+	}
+}
+
 func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 	file := ir.File{
 		GoPackage: "example",

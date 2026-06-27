@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -530,7 +531,19 @@ func isSupportedGoType(kind ir.Kind, msgName string, goType string) bool {
 	case "github.com/google/uuid.UUID":
 		return kind == ir.KindBytes
 	default:
+		return isSupportedLocalGoType(kind, goType)
+	}
+}
+
+func isSupportedLocalGoType(kind ir.Kind, goType string) bool {
+	if !token.IsIdentifier(goType) {
 		return false
+	}
+	switch kind {
+	case ir.KindMessage, ir.KindEnum:
+		return false
+	default:
+		return true
 	}
 }
 

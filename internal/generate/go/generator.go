@@ -3,6 +3,7 @@ package gogen
 import (
 	"bytes"
 	"fmt"
+	"go/token"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1836,8 +1837,43 @@ func goNativeTypeName(goType string) (string, error) {
 	case "github.com/google/uuid.UUID":
 		return "uuid.UUID", nil
 	default:
+		if token.IsIdentifier(goType) {
+			return goType, nil
+		}
 		return "", fmt.Errorf("unsupported go native type: %s", goType)
 	}
+}
+
+func goUsesBuiltinTypeConversion(field ir.Field) bool {
+	switch field.GoType {
+	case "time.Time", "time.Duration", "github.com/google/uuid.UUID":
+		return true
+	default:
+		return false
+	}
+}
+
+func goCustomRawTypeName(field ir.Field) (string, error) {
+	if field.Kind == ir.KindBytes {
+		return "[]byte", nil
+	}
+	rawType, _, err := goScalarType(field.Kind, false)
+	if err != nil {
+		return "", err
+	}
+	return rawType, nil
+}
+
+func goCustomRawValueExpr(field ir.Field, name string) (string, error) {
+	rawType, err := goCustomRawTypeName(field)
+	if err != nil {
+		return "", err
+	}
+	return rawType + "(" + name + ")", nil
+}
+
+func goCustomFromRawExpr(field ir.Field, rawName string) string {
+	return field.GoType + "(" + rawName + ")"
 }
 
 func goScalarType(kind ir.Kind, optional bool) (string, bool, error) {
@@ -2014,6 +2050,9 @@ func goEncodeOptionalField(name string, field ir.Field) ([]string, error) {
 }
 
 func goEncodeNative(fieldName string, field ir.Field) ([]string, error) {
+	if !goUsesBuiltinTypeConversion(field) {
+		return goEncodeCustomType(fieldName, field)
+	}
 	appendFunc, err := goNativeAppendFunc(field)
 	if err != nil {
 		return nil, err
@@ -2051,6 +2090,59 @@ func goEncodeNative(fieldName string, field ir.Field) ([]string, error) {
 	return lines, nil
 }
 
+func goEncodeCustomType(fieldName string, field ir.Field) ([]string, error) {
+	appendFunc, err := goAppendHelperName(field.Kind, false)
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	if field.IsRepeated {
+		if field.IsPacked && isGoPackable(field.Kind) {
+			compactHelper, err := goAppendCompactHelperName(field.Kind)
+			if err != nil {
+				return nil, err
+			}
+			rawExpr, err := goCustomRawValueExpr(field, "item")
+			if err != nil {
+				return nil, err
+			}
+			lines = append(lines, "var packed []byte")
+			lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
+			lines = append(lines, fmt.Sprintf("packed = %s(packed, %s)", compactHelper, rawExpr))
+			lines = append(lines, "}")
+			lines = append(lines, "if len(packed) > 0 {")
+			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+			lines = append(lines, "b = protowire.AppendBytes(b, packed)")
+			lines = append(lines, "}")
+			return lines, nil
+		}
+		rawExpr, err := goCustomRawValueExpr(field, "item")
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
+		lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", appendFunc, rawExpr, field.Number))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+	if field.IsOptional {
+		rawExpr, err := goCustomRawValueExpr(field, "*"+fieldName)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
+		lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", appendFunc, rawExpr, field.Number))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+	rawExpr, err := goCustomRawValueExpr(field, fieldName)
+	if err != nil {
+		return nil, err
+	}
+	lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", appendFunc, rawExpr, field.Number))
+	return lines, nil
+}
+
 func goNativeRawValueExpr(field ir.Field, name string) string {
 	switch field.GoType {
 	case "time.Time":
@@ -2069,6 +2161,9 @@ func goNativeRawValueExpr(field ir.Field, name string) string {
 }
 
 func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
+	if !goUsesBuiltinTypeConversion(field) {
+		return goDecodeCustomType(fieldName, field)
+	}
 	consumeFunc, err := goNativeConsumeFunc(field, field.IsOptional && !field.IsRepeated)
 	if err != nil {
 		return nil, err
@@ -2106,6 +2201,51 @@ func goDecodeNative(fieldName string, field ir.Field) ([]string, error) {
 		return lines, nil
 	}
 	lines = append(lines, fmt.Sprintf("b, %s, err = %s(b, typ)", fieldName, consumeFunc))
+	return lines, nil
+}
+
+func goDecodeCustomType(fieldName string, field ir.Field) ([]string, error) {
+	rawType, err := goCustomRawTypeName(field)
+	if err != nil {
+		return nil, err
+	}
+	consumeFunc, err := goConsumeFunc(field)
+	if err != nil {
+		return nil, err
+	}
+	var lines []string
+	if field.IsRepeated {
+		if field.IsPacked && isGoPackable(field.Kind) {
+			lines = append(lines, "var packed []byte")
+			lines = append(lines, "b, packed, err = ConsumeBytes(b, typ)")
+			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, "for len(packed) > 0 {")
+			lines = append(lines, "var raw "+rawType)
+			lines = append(lines, "packed, raw, err = "+consumeFunc+"(packed, "+goWireType(field.Kind)+")")
+			lines = append(lines, "if err != nil {", "return nil, err", "}")
+			lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goCustomFromRawExpr(field, "raw")))
+			lines = append(lines, "}")
+			return lines, nil
+		}
+		lines = append(lines, "var raw "+rawType)
+		lines = append(lines, "b, raw, err = "+consumeFunc+"(b, typ)")
+		lines = append(lines, "if err == nil {")
+		lines = append(lines, fmt.Sprintf("%s = append(%s, %s)", fieldName, fieldName, goCustomFromRawExpr(field, "raw")))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+	lines = append(lines, "var raw "+rawType)
+	lines = append(lines, "b, raw, err = "+consumeFunc+"(b, typ)")
+	if field.IsOptional {
+		lines = append(lines, "if err == nil {")
+		lines = append(lines, fmt.Sprintf("tmp := %s", goCustomFromRawExpr(field, "raw")))
+		lines = append(lines, fmt.Sprintf("%s = &tmp", fieldName))
+		lines = append(lines, "}")
+		return lines, nil
+	}
+	lines = append(lines, "if err == nil {")
+	lines = append(lines, fmt.Sprintf("%s = %s", fieldName, goCustomFromRawExpr(field, "raw")))
+	lines = append(lines, "}")
 	return lines, nil
 }
 
