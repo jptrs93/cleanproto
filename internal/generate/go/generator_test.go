@@ -936,6 +936,49 @@ func TestGoGeneratorClientServiceDropsOtherServiceTypes(t *testing.T) {
 	}
 }
 
+func TestGoGeneratorMovesIsZeroToEncodeFile(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{
+				Name:     "Child",
+				FullName: "example.Child",
+				Fields: []ir.Field{{Name: "label", Number: 1, Kind: ir.KindString, GoEncode: true}},
+			},
+			{
+				Name:     "Parent",
+				FullName: "example.Parent",
+				Fields: []ir.Field{{Name: "value_child", Number: 1, Kind: ir.KindMessage, MessageFullName: "example.Child", GoEncode: true, GoValue: true}},
+			},
+		},
+	}
+
+	outputs, err := Generator{}.Generate([]ir.File{file}, generate.Options{GoOut: "gen/go"})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	var model string
+	var encode string
+	for _, output := range outputs {
+		if output.Path == "gen/go/model.gen.go" {
+			model = string(output.Content)
+		}
+		if output.Path == "gen/go/encode.gen.go" {
+			encode = string(output.Content)
+		}
+	}
+	if model == "" || encode == "" {
+		t.Fatalf("expected both model.gen.go and encode.gen.go, got %#v", outputs)
+	}
+	if strings.Contains(model, "func (m Child) IsZero() bool") {
+		t.Fatalf("expected model.gen.go to exclude IsZero methods\n%s", model)
+	}
+	if !strings.Contains(encode, "func (m Child) IsZero() bool") {
+		t.Fatalf("expected encode.gen.go to contain IsZero methods\n%s", encode)
+	}
+}
+
 func generatedSection(t *testing.T, source string, start string, end string) string {
 	t.Helper()
 	startIdx := strings.Index(source, start)

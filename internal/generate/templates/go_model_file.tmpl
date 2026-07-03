@@ -29,10 +29,4 @@ type {{.Name}} struct {
 {{- end}}
 }
 
-{{if .HasIsZero}}
-func (m {{.Name}}) IsZero() bool {
-    return {{.IsZeroExpr}}
-}
-
-{{end}}
 {{end}}
