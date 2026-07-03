@@ -22,7 +22,11 @@ func (g Generator) Name() string {
 }
 
 func (g Generator) Generate(files []ir.File, options generate.Options) ([]generate.OutputFile, error) {
-	tmpl, err := template.ParseFS(templates.FS, "go_file.tmpl")
+	modelTmpl, err := template.ParseFS(templates.FS, "go_model_file.tmpl")
+	if err != nil {
+		return nil, err
+	}
+	encodeTmpl, err := template.ParseFS(templates.FS, "go_encode_file.tmpl")
 	if err != nil {
 		return nil, err
 	}
@@ -52,14 +56,21 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 		if err != nil {
 			return nil, err
 		}
-		var buf bytes.Buffer
-		if err := tmpl.Execute(&buf, data); err != nil {
+		var modelBuf bytes.Buffer
+		if err := modelTmpl.Execute(&modelBuf, data); err != nil {
 			return nil, err
 		}
-		outPath := filepath.Join(goOut, "model.gen.go")
 		outputs = append(outputs, generate.OutputFile{
-			Path:    outPath,
-			Content: buf.Bytes(),
+			Path:    filepath.Join(goOut, "model.gen.go"),
+			Content: modelBuf.Bytes(),
+		})
+		var encodeBuf bytes.Buffer
+		if err := encodeTmpl.Execute(&encodeBuf, data); err != nil {
+			return nil, err
+		}
+		outputs = append(outputs, generate.OutputFile{
+			Path:    filepath.Join(goOut, "encode.gen.go"),
+			Content: encodeBuf.Bytes(),
 		})
 		auditContent, err := buildGoAuditFile(file, msgIndex, enumIndex, pkg, options.GoJSONTags, keepMsgs)
 		if err != nil {

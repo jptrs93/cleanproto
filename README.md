@@ -426,7 +426,7 @@ cleanproto \
   example/library.proto
 ```
 
-This writes `model.gen.go`, `mux.gen.go`, `mux_util.gen.go`, and `util.gen.go` for Go, plus `model.js` and `capi.js` for JavaScript. The checked-in example outputs in this repo live under `example/testdata/gen`.
+This writes `model.gen.go`, `encode.gen.go`, `mux.gen.go`, `mux_util.gen.go`, and `util.gen.go` for Go, plus `model.js` and `capi.js` for JavaScript. The checked-in example outputs in this repo live under `example/testdata/gen`.
 
 <details>
 <summary>Show Go mux output</summary>

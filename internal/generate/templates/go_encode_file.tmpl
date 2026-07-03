@@ -2,39 +2,7 @@
 
 package {{.Package}}
 
-{{if .Imports}}
-import (
-{{- range .Imports}}
-    "{{.}}"
-{{- end}}
-)
-{{end}}
-
-{{range .Enums}}
-type {{.Name}} int32
-
-const (
-{{- $enumName := .Name}}
-{{- range .Values}}
-    {{.Name}} {{$enumName}} = {{.Number}}
-{{- end}}
-)
-
-{{end}}
-
 {{range .Messages}}
-type {{.Name}} struct {
-{{- range .Fields}}
-    {{.Name}} {{.Type}}{{if .HasJSONTag}} `json:"{{.JSONTag}}"`{{end}}
-{{- end}}
-}
-
-{{if .HasIsZero}}
-func (m {{.Name}}) IsZero() bool {
-    return {{.IsZeroExpr}}
-}
-
-{{end}}
 func (m *{{.Name}}) Encode() []byte {
     var b []byte
 {{- range .EncodeLines}}

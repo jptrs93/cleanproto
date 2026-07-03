@@ -815,6 +815,9 @@ func TestGoGeneratorClientOnlySkipsMuxFile(t *testing.T) {
 	if !paths["gen/go/client.gen.go"] {
 		t.Fatalf("expected client.gen.go in outputs, got %#v", paths)
 	}
+	if !paths["gen/go/encode.gen.go"] {
+		t.Fatalf("expected encode.gen.go in outputs, got %#v", paths)
+	}
 	if paths["gen/go/mux.gen.go"] {
 		t.Fatalf("did not expect mux.gen.go when GoServer is false, got %#v", paths)
 	}
@@ -881,13 +884,20 @@ func TestGoGeneratorClientServiceDropsOtherServiceTypes(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	var model string
+	var encode string
 	for _, output := range outputs {
 		if output.Path == "gen/go/model.gen.go" {
 			model = string(output.Content)
 		}
+		if output.Path == "gen/go/encode.gen.go" {
+			encode = string(output.Content)
+		}
 	}
 	if model == "" {
 		t.Fatalf("missing model.gen.go in outputs")
+	}
+	if encode == "" {
+		t.Fatalf("missing encode.gen.go in outputs")
 	}
 
 	mustHave := []string{
@@ -914,6 +924,15 @@ func TestGoGeneratorClientServiceDropsOtherServiceTypes(t *testing.T) {
 		if strings.Contains(model, notWant) {
 			t.Errorf("expected model.gen.go NOT to contain %q\n%s", notWant, model)
 		}
+		if strings.Contains(encode, notWant) {
+			t.Errorf("expected encode.gen.go NOT to contain %q\n%s", notWant, encode)
+		}
+	}
+	if strings.Contains(model, "func (m *KeptReq) Encode() []byte") {
+		t.Errorf("expected model.gen.go to exclude encode methods\n%s", model)
+	}
+	if !strings.Contains(encode, "func (m *KeptReq) Encode() []byte") {
+		t.Errorf("expected encode.gen.go to contain encode methods\n%s", encode)
 	}
 }
 
