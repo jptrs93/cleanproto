@@ -269,7 +269,7 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	b.WriteString("    if (body !== undefined) {\n")
 	b.WriteString("      headers['Content-Type'] = contentType || 'application/x-protobuf';\n")
 	b.WriteString("    }\n")
-	b.WriteString("    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal, credentials: 'include' };\n")
+	b.WriteString("    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal };\n")
 	b.WriteString("    if (duplex) { init.duplex = duplex; }\n")
 	b.WriteString("    return fetch(`${this.baseURL}${path}`, init);\n")
 	b.WriteString("  }\n\n")

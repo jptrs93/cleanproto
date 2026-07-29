@@ -107,7 +107,7 @@ export class Capi {
     if (body !== undefined) {
       headers['Content-Type'] = contentType || 'application/x-protobuf';
     }
-    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal, credentials: 'include' };
+    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal };
     if (duplex) { init.duplex = duplex; }
     return fetch(`${this.baseURL}${path}`, init);
   }
