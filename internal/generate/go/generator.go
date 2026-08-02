@@ -3692,28 +3692,42 @@ func HandleReqErr(ctx context.Context, err error, r *http.Request, w http.Respon
 }
 
 func handleReqErr(ctx context.Context, err error, path string, w http.ResponseWriter) {
+	httpErr := resolveApiErr(err)
 	if err != nil && len(err.Error()) > 0 {
+		msg := fmt.Sprintf("err: %v", err.Error())
 		if path != "" {
-			slog.ErrorContext(ctx, fmt.Sprintf("%v err: %v", path, err.Error()))
-		} else {
-			slog.ErrorContext(ctx, fmt.Sprintf("err: %v", err.Error()))
+			msg = fmt.Sprintf("%v err: %v", path, err.Error())
 		}
-	}
-	var httpErr ApiErr
-	if !errors.As(err, &httpErr) {
-		var httpErrPtr *ApiErr
-		var validationErr *ValidationError
-		switch {
-		case errors.As(err, &httpErrPtr) && httpErrPtr != nil:
-			httpErr = *httpErrPtr
-		case errors.As(err, &validationErr):
-			httpErr = ApiErr{DisplayErr: validationErr.Error(), Code: http.StatusBadRequest}
-		default:
-			httpErr = ApiErr{DisplayErr: "Unknown server error", Code: http.StatusInternalServerError}
+		// A 4xx is the client being told something it can act on - a bad field, an
+		// expired token, a limit reached. Those are normal traffic, and logging
+		// them at error level buries the 5xx that actually need attention.
+		if httpErr.Code >= 400 && httpErr.Code < 500 {
+			slog.InfoContext(ctx, msg)
+		} else {
+			slog.ErrorContext(ctx, msg)
 		}
 	}
 	w.Header().Set("Content-Type", "application/protobuf")
 	RespondWithStatus(ctx, w, httpErr.Encode(), int(httpErr.Code))
+}
+
+// resolveApiErr maps err onto the ApiErr sent back to the client. Anything that
+// is not an ApiErr or a validation failure is an unhandled fault, so it becomes
+// a 500 with no detail leaked to the caller.
+func resolveApiErr(err error) ApiErr {
+	var httpErr ApiErr
+	if errors.As(err, &httpErr) {
+		return httpErr
+	}
+	var httpErrPtr *ApiErr
+	if errors.As(err, &httpErrPtr) && httpErrPtr != nil {
+		return *httpErrPtr
+	}
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) {
+		return ApiErr{DisplayErr: validationErr.Error(), Code: http.StatusBadRequest}
+	}
+	return ApiErr{DisplayErr: "Unknown server error", Code: http.StatusInternalServerError}
 }
 
 const (
