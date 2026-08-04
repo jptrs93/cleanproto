@@ -12,6 +12,7 @@ type Options struct {
 	JsOut           string
 	TsOut           string
 	GoJSONTags      string
+	GoJSON          bool
 	GoCtxType       string
 	GoClient        bool
 	GoClientService string

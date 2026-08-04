@@ -28,6 +28,7 @@ cleanproto -proto_path ../protos -go.out ./apigen/go -js.out ./apigen/js -ts.out
 | `-go.ctxtype <type>` | No | Go server auth context type for handler interface, verifyAuth return, post-auth middleware, and audit callback when server stubs are generated. | `context.Context` |
 | `-go.client` | No | Generate Go client stubs in `client.gen.go` using `<ServiceBase>Capi` names, e.g. `LibraryService` -> `LibraryCapi`. | `false` |
 | `-go.server` | No | Generate Go server mux stubs in `mux.gen.go` when services exist. Set `-go.server=false` for client-only/model-only Go output. | `true` |
+| `-go.json` | No | Generated Go mux also speaks JSON, chosen per request from `Content-Type` and `Accept`. Unary RPCs only. Requires `-go.server`, and implies `-go.jsontags snake` when no style is set. | `false` |
 | `-js.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated JavaScript files. | none |
 | `-ts.out <dir>` | One of `-go.out`, `-js.out`, `-ts.out` is required | Output directory for generated TypeScript files. | none |
 
@@ -604,6 +605,33 @@ func main() {
 - Generated Go muxes can gzip responses through `MuxConfig.Compression`. `CompressionOptions.MinSize` defaults to disabled when omitted, and `CompressionOptions.Level` defaults to `gzip.DefaultCompression`.
 - `cp.compression` on an RPC overrides the global decision: `COMPRESSION_MODE_ALWAYS` forces gzip when the client accepts it, `COMPRESSION_MODE_NEVER` disables it, and the default `COMPRESSION_MODE_AUTO` uses the global `MinSize` threshold for unary RPCs.
 - Server-streaming RPCs only gzip when `cp.compression = COMPRESSION_MODE_ALWAYS`. Streaming `COMPRESSION_MODE_AUTO` behaves like disabled compression, `CompressionOptions.MinSize` is ignored once a compressed stream starts, and aborted compressed streams terminate without a final gzip trailer so clients can still detect a broken stream.
+
+### JSON request and response bodies
+
+`-go.json` makes the generated Go mux speak JSON in addition to protobuf. Nothing else changes: routes, validation, auth, audit, and compression are untouched, and the generated Go/JS/TS clients still send and receive protobuf only. Without the flag the generated output is byte-for-byte what it was before, and `encoding/json` is not imported.
+
+Negotiation is per request, and the two directions are independent:
+
+- Request body is parsed as JSON when `Content-Type` is `application/json` (or any `+json` suffix type), and as protobuf otherwise.
+- Response body is JSON when `Accept` lists `application/json` (or a `+json` type), and protobuf otherwise. A wildcard `Accept: */*` gets protobuf, so existing clients are unaffected.
+
+So a caller may POST protobuf and ask for JSON back, or the reverse.
+
+```
+curl -H 'Content-Type: application/json' -H 'Accept: application/json' \
+     -d '{"id":"abc"}' https://host/v1/library/book
+```
+
+Details worth knowing:
+
+- **Unary only.** Client-, server-, and bidirectional-streaming RPCs stay uvarint-length-prefixed protobuf regardless of headers, and a mid-stream failure reports as protobuf.
+- **Error bodies follow `Accept` too.** A JSON caller gets `ApiErr` as JSON with the same status code.
+- **`cp.go_encode = false` implies no JSON either.** Under `-go.json` such a field is tagged `json:"-"`, so a field deliberately kept off the protobuf wire (`ApiErr.internal_err` being the motivating case) cannot reach clients through JSON. Without `-go.json`, JSON tags are just a convenience for your own marshalling and the field is left alone.
+- **Field names come from the JSON tags**, hence `-go.json` implying `-go.jsontags snake`; otherwise Go field names such as `ID` and `CreatedAt` would end up in response bodies.
+- **`bytes` fields are standard base64 strings**, which is both what `encoding/json` does and what canonical protobuf JSON specifies. Note that a `bytes` field holding UTF-8 text is still base64 rather than a readable string.
+- **`cp.go_type` decides the JSON shape.** A field mapped to `time.Time` marshals as RFC3339 and `time.Duration` as an integer nanosecond count, regardless of the underlying proto type. These do not match `cp.js_type` mappings, so JSON is not a route to interop with the generated JS/TS clients.
+- **Enums are integers**, not names.
+- **An empty JSON body decodes to the zero message**, matching how protobuf decodes zero bytes. Malformed JSON is a `400`, and `MuxConfig.MaxRequestBodySize` is enforced before parsing.
 
 ### Client streaming
 

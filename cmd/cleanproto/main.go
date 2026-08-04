@@ -31,6 +31,7 @@ func main() {
 	var jsOut string
 	var tsOut string
 	var goJSONTags string
+	var goJSON bool
 	var goCtxType string
 	var goClient bool
 	var goClientService string
@@ -41,6 +42,7 @@ func main() {
 	flag.StringVar(&jsOut, "js.out", "", "output directory for JS")
 	flag.StringVar(&tsOut, "ts.out", "", "output directory for TS")
 	flag.StringVar(&goJSONTags, "go.jsontags", "", "Go JSON tags style (snake)")
+	flag.BoolVar(&goJSON, "go.json", false, "generated Go mux accepts JSON request bodies and returns JSON responses based on Content-Type/Accept (unary RPCs only)")
 	flag.StringVar(&goCtxType, "go.ctxtype", "", "Go server auth context type override")
 	flag.BoolVar(&goClient, "go.client", false, "generate Go client stubs")
 	flag.StringVar(&goClientService, "go.client.service", "", "only generate Go client stubs for this service (empty = all)")
@@ -62,6 +64,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "-go.jsontags must be empty or: snake")
 		os.Exit(1)
 	}
+	// JSON on the wire needs stable field names. Without tags the marshaller
+	// falls back to Go field names, which would put "ID"/"CreatedAt" in the
+	// response body, so -go.json picks the tag style when one was not chosen.
+	if goJSON && goJSONTags == "" {
+		goJSONTags = "snake"
+	}
+	if goJSON && !goServer {
+		fmt.Fprintln(os.Stderr, "-go.json requires -go.server")
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	p := parser.Parser{ImportPaths: importPaths}
@@ -76,6 +88,7 @@ func main() {
 		JsOut:           cleanPath(jsOut),
 		TsOut:           cleanPath(tsOut),
 		GoJSONTags:      goJSONTags,
+		GoJSON:          goJSON,
 		GoCtxType:       goCtxType,
 		GoClient:        goClient,
 		GoClientService: goClientService,

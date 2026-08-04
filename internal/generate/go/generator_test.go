@@ -105,7 +105,7 @@ func TestBuildGoFileDataGoValueMessageField(t *testing.T) {
 		msgIndex[msg.FullName] = msg
 	}
 
-	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "", nil, nil)
+	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "", false, nil, nil)
 	if err != nil {
 		t.Fatalf("buildGoFileData: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestBuildGoFileDataPackageLocalCustomGoType(t *testing.T) {
 		msgIndex[msg.FullName] = msg
 	}
 
-	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "", nil, nil)
+	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "", false, nil, nil)
 	if err != nil {
 		t.Fatalf("buildGoFileData: %v", err)
 	}
@@ -295,9 +295,11 @@ func TestBuildGoMuxFileAddsCompressionOptionsAndRouteModes(t *testing.T) {
 		t.Fatalf("expected single-service mux to keep CreateMux name, got:\n%s", mux)
 	}
 
-	utilSource := strings.ReplaceAll(muxUtilSource, "__PACKAGE__", "example")
-	if _, err := parser.ParseFile(token.NewFileSet(), "mux_util.gen.go", utilSource, parser.AllErrors); err != nil {
-		t.Fatalf("expected generated mux util source to parse: %v\n%s", err, utilSource)
+	for _, goJSON := range []bool{false, true} {
+		utilSource := string(buildGoMuxUtilSource("example", goJSON))
+		if _, err := parser.ParseFile(token.NewFileSet(), "mux_util.gen.go", utilSource, parser.AllErrors); err != nil {
+			t.Fatalf("expected generated mux util source (goJSON=%v) to parse: %v\n%s", goJSON, err, utilSource)
+		}
 	}
 	if _, err := parser.ParseFile(token.NewFileSet(), "mux.gen.go", mux, parser.AllErrors); err != nil {
 		t.Fatalf("expected generated mux source to parse: %v\n%s", err, mux)
@@ -990,4 +992,85 @@ func generatedSection(t *testing.T, source string, start string, end string) str
 		t.Fatalf("missing section end %q after %q in:\n%s", end, start, source[startIdx:])
 	}
 	return source[startIdx : startIdx+endIdx+len(end)]
+}
+
+func TestBuildGoMuxUtilSourceJSONMode(t *testing.T) {
+	jsonOnly := []string{
+		`"encoding/json"`,
+		"func negotiatedJSONResponse(r *http.Request) bool {",
+		"func negotiatedJSONRequest(r *http.Request) bool {",
+		"func hasJSONMediaType(header string) bool {",
+		"func decodeRequestPayload[T any](",
+		`w.Header().Set("Content-Type", "application/json")`,
+		"handleReqErr(ctx, err, path, negotiatedJSONResponse(r), w)",
+	}
+
+	withJSON := string(buildGoMuxUtilSource("example", true))
+	for _, want := range jsonOnly {
+		if !strings.Contains(withJSON, want) {
+			t.Errorf("expected -go.json mux util to contain %q", want)
+		}
+	}
+
+	// Without the flag the file must be exactly what it always was: no JSON
+	// helpers, and critically no encoding/json import pulled in for nothing.
+	withoutJSON := string(buildGoMuxUtilSource("example", false))
+	for _, unwanted := range jsonOnly {
+		if strings.Contains(withoutJSON, unwanted) {
+			t.Errorf("expected default mux util to omit %q", unwanted)
+		}
+	}
+	if strings.Contains(withoutJSON, "cp:json") {
+		t.Error("marker comments leaked into generated output")
+	}
+	if strings.Contains(withJSON, "cp:json") {
+		t.Error("marker comments leaked into generated output")
+	}
+	// Streaming stays protobuf-framed in both modes.
+	if !strings.Contains(withJSON, `h.Set("Content-Type", "application/protobuf-stream")`) {
+		t.Error("expected streaming responses to stay protobuf in JSON mode")
+	}
+}
+
+func TestBuildGoMessageJSONTagsExcludeNonEncodedFields(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{{
+			Name:     "ApiErr",
+			FullName: "example.ApiErr",
+			Fields: []ir.Field{
+				{Name: "display_err", Number: 1, Kind: ir.KindString, GoEncode: true},
+				{Name: "internal_err", Number: 2, Kind: ir.KindString, GoEncode: false},
+			},
+		}},
+	}
+	msgIndex := map[string]ir.Message{"example.ApiErr": file.Messages[0]}
+
+	// go_encode=false stays off the wire in JSON mode, matching protobuf.
+	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "snake", true, nil, nil)
+	if err != nil {
+		t.Fatalf("buildGoFileData: %v", err)
+	}
+	tags := map[string]string{}
+	for _, f := range data.Messages[0].Fields {
+		tags[f.Name] = f.JSONTag
+	}
+	if tags["DisplayErr"] != "display_err,omitempty" {
+		t.Errorf("DisplayErr tag = %q, want display_err,omitempty", tags["DisplayErr"])
+	}
+	if tags["InternalErr"] != "-" {
+		t.Errorf("InternalErr tag = %q, want - (go_encode=false must not reach JSON clients)", tags["InternalErr"])
+	}
+
+	// Without -go.json the tags are only for the caller's own marshalling, so
+	// go_encode=false is left alone and the field keeps its name.
+	data, err = buildGoFileData(file, msgIndex, nil, file.GoPackage, "snake", false, nil, nil)
+	if err != nil {
+		t.Fatalf("buildGoFileData: %v", err)
+	}
+	for _, f := range data.Messages[0].Fields {
+		if f.Name == "InternalErr" && f.JSONTag != "internal_err,omitempty" {
+			t.Errorf("InternalErr tag = %q, want internal_err,omitempty without -go.json", f.JSONTag)
+		}
+	}
 }
