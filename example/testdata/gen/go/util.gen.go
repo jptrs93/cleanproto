@@ -924,6 +924,43 @@ func ConsumeUUIDFromBytes(b []byte, typ Type) ([]byte, uuid.UUID, error) {
 	return b, v, nil
 }
 
+// Elem variants for repeated fields: a zero value is emitted as the field's
+// zero encoding rather than skipped, so later elements keep their positions.
+
+func AppendTimestampFromTimeElem(b []byte, v time.Time, num Number) []byte {
+	return AppendBytesElem(b, EncodeTimestamp(v), num)
+}
+
+func AppendInt32FromTimeElem(b []byte, v time.Time, num Number) []byte {
+	if v.IsZero() {
+		return AppendInt32Elem(b, 0, num)
+	}
+	return AppendInt32Elem(b, int32(v.Unix()), num)
+}
+
+func AppendInt64FromTimeElem(b []byte, v time.Time, num Number) []byte {
+	if v.IsZero() {
+		return AppendInt64Elem(b, 0, num)
+	}
+	return AppendInt64Elem(b, v.UnixMilli(), num)
+}
+
+func AppendDurationFromDurationElem(b []byte, v time.Duration, num Number) []byte {
+	return AppendBytesElem(b, EncodeDuration(v), num)
+}
+
+func AppendInt32FromDurationElem(b []byte, v time.Duration, num Number) []byte {
+	return AppendInt32Elem(b, int32(v/time.Second), num)
+}
+
+func AppendInt64FromDurationElem(b []byte, v time.Duration, num Number) []byte {
+	return AppendInt64Elem(b, int64(v/time.Second), num)
+}
+
+func AppendBytesFromUUIDElem(b []byte, v uuid.UUID, num Number) []byte {
+	return AppendBytesElem(b, v[:], num)
+}
+
 func ConsumeUUIDFromBytesOpt(b []byte, typ Type) ([]byte, *uuid.UUID, error) {
 	var v uuid.UUID
 	var err error
@@ -1432,6 +1469,86 @@ func AppendSfixed64FieldOpt(b []byte, v *int64, num Number) []byte {
 	}
 	b = AppendTag(b, num, Fixed64Type)
 	return AppendFixed64(b, uint64(*v))
+}
+
+// The Elem variants write one element of a non-packed repeated field. Unlike
+// the Field helpers they never skip the zero value: every element occupies a
+// position, and skipping one shifts all later elements against any parallel
+// column.
+
+func AppendStringElem(b []byte, v string, num Number) []byte {
+	b = AppendTag(b, num, BytesType)
+	return AppendBytes(b, []byte(v))
+}
+
+func AppendBytesElem(b []byte, v []byte, num Number) []byte {
+	b = AppendTag(b, num, BytesType)
+	return AppendBytes(b, v)
+}
+
+func AppendBoolElem(b []byte, v bool, num Number) []byte {
+	b = AppendTag(b, num, VarintType)
+	return AppendBoolCompact(b, v)
+}
+
+func AppendFloat32Elem(b []byte, v float32, num Number) []byte {
+	b = AppendTag(b, num, Fixed32Type)
+	return AppendFloat32Compact(b, v)
+}
+
+func AppendFloat64Elem(b []byte, v float64, num Number) []byte {
+	b = AppendTag(b, num, Fixed64Type)
+	return AppendFloat64Compact(b, v)
+}
+
+func AppendInt32Elem(b []byte, v int32, num Number) []byte {
+	b = AppendTag(b, num, VarintType)
+	return AppendInt32Compact(b, v)
+}
+
+func AppendUint32Elem(b []byte, v uint32, num Number) []byte {
+	b = AppendTag(b, num, VarintType)
+	return AppendUint32Compact(b, v)
+}
+
+func AppendSint32Elem(b []byte, v int32, num Number) []byte {
+	b = AppendTag(b, num, VarintType)
+	return AppendSint32Compact(b, v)
+}
+
+func AppendInt64Elem(b []byte, v int64, num Number) []byte {
+	b = AppendTag(b, num, VarintType)
+	return AppendInt64Compact(b, v)
+}
+
+func AppendUint64Elem(b []byte, v uint64, num Number) []byte {
+	b = AppendTag(b, num, VarintType)
+	return AppendUint64Compact(b, v)
+}
+
+func AppendSint64Elem(b []byte, v int64, num Number) []byte {
+	b = AppendTag(b, num, VarintType)
+	return AppendSint64Compact(b, v)
+}
+
+func AppendFixed32Elem(b []byte, v uint32, num Number) []byte {
+	b = AppendTag(b, num, Fixed32Type)
+	return AppendFixed32Compact(b, v)
+}
+
+func AppendSfixed32Elem(b []byte, v int32, num Number) []byte {
+	b = AppendTag(b, num, Fixed32Type)
+	return AppendSfixed32Compact(b, v)
+}
+
+func AppendFixed64Elem(b []byte, v uint64, num Number) []byte {
+	b = AppendTag(b, num, Fixed64Type)
+	return AppendFixed64Compact(b, v)
+}
+
+func AppendSfixed64Elem(b []byte, v int64, num Number) []byte {
+	b = AppendTag(b, num, Fixed64Type)
+	return AppendSfixed64Compact(b, v)
 }
 
 func AppendFieldDecorator[T any](appendField func([]byte, T, Number) []byte, num Number) func([]byte, T) []byte {

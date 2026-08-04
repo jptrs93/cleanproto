@@ -154,6 +154,65 @@ func TestBuildGoFileDataGoValueMessageField(t *testing.T) {
 	}
 }
 
+// Every element of a repeated field must reach the wire, zero-valued or not:
+// a skipped element shifts all later ones against any parallel column.
+func TestBuildGoFileDataRepeatedElementsKeepPositions(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{
+				Name:     "Item",
+				FullName: "example.Item",
+				Fields:   []ir.Field{{Name: "id", Number: 1, Kind: ir.KindString, GoEncode: true}},
+			},
+			{
+				Name:     "Columns",
+				FullName: "example.Columns",
+				Fields: []ir.Field{
+					{Name: "names", Number: 1, Kind: ir.KindString, IsRepeated: true, GoEncode: true},
+					{Name: "codes", Number: 2, Kind: ir.KindInt32, IsRepeated: true, GoEncode: true},
+					{Name: "items", Number: 3, Kind: ir.KindMessage, MessageFullName: "example.Item", IsRepeated: true, GoEncode: true},
+					{Name: "times", Number: 4, Kind: ir.KindMessage, IsTimestamp: true, IsRepeated: true, GoEncode: true},
+					{Name: "waits", Number: 5, Kind: ir.KindMessage, IsDuration: true, IsRepeated: true, GoEncode: true},
+				},
+			},
+		},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	data, err := buildGoFileData(file, msgIndex, nil, file.GoPackage, "", false, nil, nil)
+	if err != nil {
+		t.Fatalf("buildGoFileData: %v", err)
+	}
+
+	var columns goMessage
+	for _, msg := range data.Messages {
+		if msg.Name == "Columns" {
+			columns = msg
+		}
+	}
+	encode := strings.Join(columns.EncodeLines, "\n")
+	for _, want := range []string{
+		"b = AppendRepeated(b, m.Names, AppendFieldDecorator(AppendStringElem, 1))",
+		"b = AppendRepeated(b, m.Codes, AppendFieldDecorator(AppendInt32Elem, 2))",
+		"b = AppendBytes(b, EncodeTimestamp(item))",
+		"b = AppendBytes(b, EncodeDuration(item))",
+	} {
+		if !strings.Contains(encode, want) {
+			t.Fatalf("expected encode to contain %q, got:\n%s", want, encode)
+		}
+	}
+	if strings.Contains(encode, "if item.IsZero() {") || strings.Contains(encode, "if item == 0 {") {
+		t.Fatalf("expected repeated timestamp/duration elements to be emitted unconditionally, got:\n%s", encode)
+	}
+	if !strings.Contains(encode, "b = AppendTag(b, 3, BytesType)\nif item == nil {\nb = AppendBytes(b, nil)\ncontinue\n}") {
+		t.Fatalf("expected nil repeated message element to write an empty message in place, got:\n%s", encode)
+	}
+}
+
 func TestBuildGoFileDataPackageLocalCustomGoType(t *testing.T) {
 	file := ir.File{
 		GoPackage: "example",

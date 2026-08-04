@@ -1973,11 +1973,14 @@ func buildGoEncodeLines(msg ir.Message, msgIndex map[string]ir.Message, enumInde
 			}
 			lines = append(lines, mapLines...)
 		case field.IsRepeated && field.Kind == ir.KindMessage:
+			// A nil element still writes an empty message: every element of a
+			// repeated field occupies a position, and skipping one silently
+			// shifts all later elements against any parallel column.
 			lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-			if !goRepeatedValueSlice(field) {
-				lines = append(lines, "if item == nil {", "continue", "}")
-			}
 			lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+			if !goRepeatedValueSlice(field) {
+				lines = append(lines, "if item == nil {", "b = protowire.AppendBytes(b, nil)", "continue", "}")
+			}
 			lines = append(lines, "b = protowire.AppendBytes(b, item.Encode())")
 			lines = append(lines, "}")
 		case field.IsRepeated:
@@ -2035,7 +2038,7 @@ func goEncodeRepeated(fieldName string, field ir.Field) ([]string, error) {
 	if field.Kind == ir.KindEnum {
 		return goEncodeRepeatedEnum(fieldName, field), nil
 	}
-	helper, err := goAppendHelperName(field.Kind, false)
+	helper, err := goAppendElemHelperName(field.Kind)
 	if err != nil {
 		return nil, err
 	}
@@ -2092,7 +2095,7 @@ func goEncodeNative(fieldName string, field ir.Field) ([]string, error) {
 			return lines, nil
 		}
 		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-		lines = append(lines, fmt.Sprintf("b = %s(b, item, %d)", appendFunc, field.Number))
+		lines = append(lines, fmt.Sprintf("b = %sElem(b, item, %d)", appendFunc, field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -2136,8 +2139,12 @@ func goEncodeCustomType(fieldName string, field ir.Field) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		elemFunc, err := goAppendElemHelperName(field.Kind)
+		if err != nil {
+			return nil, err
+		}
 		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-		lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", appendFunc, rawExpr, field.Number))
+		lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", elemFunc, rawExpr, field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -2368,7 +2375,7 @@ func goEncodeRepeatedEnum(fieldName string, field ir.Field) []string {
 	}
 	return []string{
 		fmt.Sprintf("for _, item := range %s {", fieldName),
-		fmt.Sprintf("b = AppendInt32Field(b, int32(item), %d)", field.Number),
+		fmt.Sprintf("b = AppendInt32Elem(b, int32(item), %d)", field.Number),
 		"}",
 	}
 }
@@ -2418,12 +2425,26 @@ func goAppendHelperName(kind ir.Kind, optional bool) (string, error) {
 	return base, nil
 }
 
+// The per-element helper for a non-packed repeated field. Unlike the singular
+// Field helpers these never skip the zero value: every element of a repeated
+// field occupies a position, and skipping one silently shifts all later
+// elements against any parallel column.
+func goAppendElemHelperName(kind ir.Kind) (string, error) {
+	base, err := goAppendHelperName(kind, false)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(base, "Field") + "Elem", nil
+}
+
 func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
 	var lines []string
 	if field.IsRepeated {
+		// Zero elements are emitted (as an empty message) rather than skipped,
+		// so later elements keep their positions.
 		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-		lines = append(lines, "if item.IsZero() {", "continue", "}")
-		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(item), %d)", field.Number))
+		lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+		lines = append(lines, "b = protowire.AppendBytes(b, EncodeTimestamp(item))")
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -2445,8 +2466,8 @@ func goEncodeDuration(fieldName string, field ir.Field) ([]string, error) {
 	var lines []string
 	if field.IsRepeated {
 		lines = append(lines, fmt.Sprintf("for _, item := range %s {", fieldName))
-		lines = append(lines, "if item == 0 {", "continue", "}")
-		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeDuration(item), %d)", field.Number))
+		lines = append(lines, fmt.Sprintf("b = protowire.AppendTag(b, %d, protowire.BytesType)", field.Number))
+		lines = append(lines, "b = protowire.AppendBytes(b, EncodeDuration(item))")
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -4356,6 +4377,43 @@ func ConsumeUUIDFromBytes(b []byte, typ protowire.Type) ([]byte, uuid.UUID, erro
 	return b, v, nil
 }
 
+// Elem variants for repeated fields: a zero value is emitted as the field's
+// zero encoding rather than skipped, so later elements keep their positions.
+
+func AppendTimestampFromTimeElem(b []byte, v time.Time, num protowire.Number) []byte {
+	return AppendBytesElem(b, EncodeTimestamp(v), num)
+}
+
+func AppendInt32FromTimeElem(b []byte, v time.Time, num protowire.Number) []byte {
+	if v.IsZero() {
+		return AppendInt32Elem(b, 0, num)
+	}
+	return AppendInt32Elem(b, int32(v.Unix()), num)
+}
+
+func AppendInt64FromTimeElem(b []byte, v time.Time, num protowire.Number) []byte {
+	if v.IsZero() {
+		return AppendInt64Elem(b, 0, num)
+	}
+	return AppendInt64Elem(b, v.UnixMilli(), num)
+}
+
+func AppendDurationFromDurationElem(b []byte, v time.Duration, num protowire.Number) []byte {
+	return AppendBytesElem(b, EncodeDuration(v), num)
+}
+
+func AppendInt32FromDurationElem(b []byte, v time.Duration, num protowire.Number) []byte {
+	return AppendInt32Elem(b, int32(v/time.Second), num)
+}
+
+func AppendInt64FromDurationElem(b []byte, v time.Duration, num protowire.Number) []byte {
+	return AppendInt64Elem(b, int64(v/time.Second), num)
+}
+
+func AppendBytesFromUUIDElem(b []byte, v uuid.UUID, num protowire.Number) []byte {
+	return AppendBytesElem(b, v[:], num)
+}
+
 func ConsumeUUIDFromBytesOpt(b []byte, typ protowire.Type) ([]byte, *uuid.UUID, error) {
 	var v uuid.UUID
 	var err error
@@ -4864,6 +4922,86 @@ func AppendSfixed64FieldOpt(b []byte, v *int64, num protowire.Number) []byte {
 	}
 	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
 	return protowire.AppendFixed64(b, uint64(*v))
+}
+
+// The Elem variants write one element of a non-packed repeated field. Unlike
+// the Field helpers they never skip the zero value: every element occupies a
+// position, and skipping one shifts all later elements against any parallel
+// column.
+
+func AppendStringElem(b []byte, v string, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.BytesType)
+	return protowire.AppendBytes(b, []byte(v))
+}
+
+func AppendBytesElem(b []byte, v []byte, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.BytesType)
+	return protowire.AppendBytes(b, v)
+}
+
+func AppendBoolElem(b []byte, v bool, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return AppendBoolCompact(b, v)
+}
+
+func AppendFloat32Elem(b []byte, v float32, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return AppendFloat32Compact(b, v)
+}
+
+func AppendFloat64Elem(b []byte, v float64, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return AppendFloat64Compact(b, v)
+}
+
+func AppendInt32Elem(b []byte, v int32, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return AppendInt32Compact(b, v)
+}
+
+func AppendUint32Elem(b []byte, v uint32, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return AppendUint32Compact(b, v)
+}
+
+func AppendSint32Elem(b []byte, v int32, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return AppendSint32Compact(b, v)
+}
+
+func AppendInt64Elem(b []byte, v int64, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return AppendInt64Compact(b, v)
+}
+
+func AppendUint64Elem(b []byte, v uint64, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return AppendUint64Compact(b, v)
+}
+
+func AppendSint64Elem(b []byte, v int64, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.VarintType)
+	return AppendSint64Compact(b, v)
+}
+
+func AppendFixed32Elem(b []byte, v uint32, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return AppendFixed32Compact(b, v)
+}
+
+func AppendSfixed32Elem(b []byte, v int32, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
+	return AppendSfixed32Compact(b, v)
+}
+
+func AppendFixed64Elem(b []byte, v uint64, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return AppendFixed64Compact(b, v)
+}
+
+func AppendSfixed64Elem(b []byte, v int64, num protowire.Number) []byte {
+	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
+	return AppendSfixed64Compact(b, v)
 }
 
 func AppendFieldDecorator[T any](appendField func([]byte, T, protowire.Number) []byte, num protowire.Number) func([]byte, T) []byte {

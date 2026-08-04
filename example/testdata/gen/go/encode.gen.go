@@ -10,7 +10,7 @@ func (m *Book) Encode() []byte {
 	b = AppendInt32Field(b, m.PageCount, 4)
 	b = AppendStringField(b, m.Genre, 5)
 	b = AppendInt32Field(b, int32(m.Status), 6)
-	b = AppendRepeated(b, m.Tags, AppendFieldDecorator(AppendStringField, 7))
+	b = AppendRepeated(b, m.Tags, AppendFieldDecorator(AppendStringElem, 7))
 	return b
 }
 
@@ -62,10 +62,11 @@ func (m *Library) Encode() []byte {
 	b = AppendStringField(b, m.ID, 1)
 	b = AppendStringField(b, m.Name, 2)
 	for _, item := range m.Books {
+		b = AppendTag(b, 3, BytesType)
 		if item == nil {
+			b = AppendBytes(b, nil)
 			continue
 		}
-		b = AppendTag(b, 3, BytesType)
 		b = AppendBytes(b, item.Encode())
 	}
 	return b
