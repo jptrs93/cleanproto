@@ -78,4 +78,15 @@ extend google.protobuf.MethodOptions {
   //   }
   CompressionMode compression = 50033;
   string url = 50034;
+  // multipart_response sends the response message's fields as a sequence of
+  // independently decodable parts rather than one encoded message: one
+  // uvarint length-prefixed frame per field, in field-number order, flushed
+  // after each. The generated handler returns one thunk per part, so the
+  // first part reaches the wire before the later ones are computed.
+  //
+  //   rpc PostV3Suggestion(Status) returns (SuggestionResponse) {
+  //     option (cp.multipart_response) = true;
+  //     option (cp.compression) = COMPRESSION_MODE_NEVER;
+  //   }
+  bool multipart_response = 50035;
 }

@@ -37,6 +37,7 @@ var E_OperationId = cp.E_OperationId
 var E_Audit = cp.E_Audit
 var E_Compression = cp.E_Compression
 var E_Url = cp.E_Url
+var E_MultipartResponse = cp.E_MultipartResponse
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
@@ -269,6 +270,22 @@ func auditFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) 
 		return false, nil
 	}
 	val := proto.GetExtension(opts, E_Audit)
+	b, ok := val.(bool)
+	if !ok {
+		return false, nil
+	}
+	return b, nil
+}
+
+func multipartResponseFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) {
+	opts, ok := method.Options().(*descriptorpb.MethodOptions)
+	if !ok || opts == nil {
+		return false, nil
+	}
+	if !proto.HasExtension(opts, E_MultipartResponse) {
+		return false, nil
+	}
+	val := proto.GetExtension(opts, E_MultipartResponse)
 	b, ok := val.(bool)
 	if !ok {
 		return false, nil

@@ -88,6 +88,7 @@ This generates models where the `timestamp` field has the type `Date` and `time.
 | `cp.json_ignore = true` | Keep the field in generated Go models but force a `json:"-"` struct tag so it is omitted by JSON marshalling. |
 | `cp.compression = COMPRESSION_MODE_ALWAYS` | Always attempt gzip response compression for this RPC when the client accepts it, even if global `MinSize` would skip it. For server-streaming RPCs, this is the only mode that enables gzip. |
 | `cp.compression = COMPRESSION_MODE_NEVER` | Never gzip responses for this RPC. When omitted, the default is `COMPRESSION_MODE_AUTO`, which uses the global mux compression config. |
+| `cp.multipart_response = true` | Send the response message's fields as a sequence of independently decodable parts, one frame each, flushed after each, so the first part reaches the client before the later ones are computed. See [Multipart responses](#multipart-responses). |
 
 
 
@@ -666,6 +667,78 @@ Deployment caveats:
 - **No late HTTP error codes.** Once the handler yields its first response frame, the HTTP status is committed to `200`. Subsequent request-decode or validation errors are logged and the connection closes mid-stream — they can't surface as `4xx`. If clean error reporting matters, model errors in the response message (e.g. a `oneof { Resp ok; ErrInfo err; }`).
 - **Browser bidi requires HTTPS + HTTP/2.** `duplex: 'half'` is not available over plain `http://` in browsers. Node 18+ undici supports it over both HTTP/1.1 and HTTP/2.
 - `MuxConfig.MaxRequestBodySize` is a per-frame cap (same as client streaming); there is no total-body cap on bidi streams.
+
+### Multipart responses
+
+Protobuf has no fixed-arity multi-response concept — an RPC returns exactly one
+message, optionally `stream`-prefixed. `cp.multipart_response = true` reinterprets
+the response message so that its **fields are the parts**, in field-number order:
+
+```proto
+message BookDetailRes {
+  Book book = 1;     // part 1
+  Library library = 2;  // part 2
+}
+
+rpc GetLibraryBook_DetailV1(GetBookReq) returns (BookDetailRes) {
+  option (cp.multipart_response) = true;
+  option (cp.compression) = COMPRESSION_MODE_NEVER;
+}
+```
+
+The body is one uvarint-length-prefixed frame per part, the same framing server
+streaming uses, flushed after each — multipart is a server stream with a
+statically known, heterogeneous, fixed-length type sequence. Content type is
+`application/protobuf-parts`, distinct from `application/protobuf-stream` so a
+bounded part sequence cannot be mistaken for an unbounded one. There is no
+`Content-Length`: a length header would require knowing every part's size up
+front, which is exactly the constraint that makes early delivery impossible.
+
+Restrictions:
+
+- Every field of the response message must be a non-repeated message. Scalars
+  have no self-delimiting encoding, so they cannot be an independently decodable
+  part, and `cp.go_ignore` on a part is rejected.
+- Field numbers must be contiguous from 1, and there must be at least two of
+  them (one part is a unary RPC).
+- **No two parts may share a message type.** Parts are returned positionally, so
+  same-typed parts would be silently swappable at every call site.
+- Incompatible with `stream` on either side, with `cp.go_custom`, and with
+  `cp.audit` (the audit hook takes a single response value).
+- `cp.compression` must be `COMPRESSION_MODE_NEVER`; a compressor buffers and
+  would defeat the flush between parts.
+
+Generated surfaces:
+
+- Go handler: `GetX(ctx, *Req) (func() (*Part1, error), func() (*Part2, error))`.
+  The mux calls the thunks in order, once each, writing and flushing between
+  them, so a part may read state the previous one computed. There is no `error`
+  return: part 1 runs before anything is committed so its failure is still a
+  status code, while every later part can only abort — the signature encodes
+  that boundary.
+- Go client: `GetX(ctx, *Req) (func() (*Part1, error), func() (*Part2, error), func())`.
+  The request is issued lazily on the first thunk, so transport, status and
+  decode errors all surface from part 1. The trailing `func()` closes the body
+  and is a no-op if no thunk ran, so abandoning after part 1 is just returning.
+- An absent part is a zero-length frame, decoding to `(nil, nil)`.
+- **No JS/TS client.** Multipart methods are skipped by those generators rather
+  than erroring, so one multipart RPC does not stop a contract from generating a
+  JS client; calling the method is a missing-function error.
+
+Deployment caveats:
+
+- **Reverse-proxy buffering defeats the whole point.** A proxy that buffers the
+  response reads the full body and re-emits it, so the client receives every
+  part at once no matter what the origin did. `SetPartsHeaders` sets
+  `X-Accel-Buffering: no` and `Cache-Control: no-cache, no-transform`, which
+  nginx respects; Traefik needs the route kept out of any `buffering` middleware
+  and `responseForwarding.flushInterval` set.
+- **Failure after part 1 aborts the response.** The status code is already spent,
+  so `PartsWriter.Abort` logs and panics with `http.ErrAbortHandler`, dropping
+  the connection without the terminating chunk. Unlike a stream — where an early
+  end is indistinguishable from a legitimate one — the client knows the part
+  count statically, so it reports the short body as an error rather than an
+  absent trailing part.
 
 <details>
 <summary>Show JavaScript output</summary>

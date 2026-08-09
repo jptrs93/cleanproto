@@ -1133,3 +1133,227 @@ func TestBuildGoMessageJSONTagsExcludeNonEncodedFields(t *testing.T) {
 		}
 	}
 }
+
+// multipartTestFile is a two-part response (Book then Library) on an RPC that
+// satisfies the multipart contract, for tests that vary one thing about it.
+func multipartTestFile() (ir.File, map[string]ir.Message) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{
+			{Name: "Book", FullName: "example.Book", Fields: []ir.Field{{Name: "id", ProtoName: "id", Number: 1, Kind: ir.KindString}}},
+			{Name: "Library", FullName: "example.Library", Fields: []ir.Field{{Name: "name", ProtoName: "name", Number: 1, Kind: ir.KindString}}},
+			{Name: "GetBookReq", FullName: "example.GetBookReq", Fields: []ir.Field{{Name: "id", ProtoName: "id", Number: 1, Kind: ir.KindString}}},
+			{Name: "BookDetailRes", FullName: "example.BookDetailRes", Fields: []ir.Field{
+				{Name: "book", ProtoName: "book", Number: 1, Kind: ir.KindMessage, MessageFullName: "example.Book"},
+				{Name: "library", ProtoName: "library", Number: 2, Kind: ir.KindMessage, MessageFullName: "example.Library"},
+			}},
+		},
+		Services: []ir.Service{{
+			Name: "LibraryService",
+			Methods: []ir.Method{
+				{
+					Name:              "GetLibraryBook_DetailV1",
+					InputFullName:     "example.GetBookReq",
+					OutputFullName:    "example.BookDetailRes",
+					MultipartResponse: true,
+					CompressionMode:   compressionNever,
+				},
+			},
+		}},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+	return file, msgIndex
+}
+
+func TestBuildGoMuxFileEmitsMultipartHandler(t *testing.T) {
+	file, msgIndex := multipartTestFile()
+
+	mux, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoMuxFile: %v", err)
+	}
+
+	checks := []string{
+		"GetLibraryBookDetailV1(context.Context, *GetBookReq) (func() (*Book, error), func() (*Library, error))",
+		"partFnBook, partFnLibrary := h.GetLibraryBookDetailV1(authCtx, req)",
+		// Part 1 runs before anything is committed, so it still gets a status code.
+		"partBook, err := partFnBook()",
+		"HandleReqErr(authCtx, err, r, w)",
+		"parts := NewPartsWriter(w)",
+		// Every later part can only abort.
+		"partLibrary, err := partFnLibrary()",
+		"parts.Abort(authCtx, err)",
+		"m.HandleFunc(\"GET /v1/library/book-detail\"",
+	}
+	for _, check := range checks {
+		if !strings.Contains(mux, check) {
+			t.Fatalf("expected generated mux to contain %q, got:\n%s", check, mux)
+		}
+	}
+	if strings.Contains(mux, "Respond(authCtx, r, w") && strings.Contains(mux, "DecodeBookDetailRes") {
+		t.Fatalf("multipart response must not be sent as a single encoded message, got:\n%s", mux)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "mux.gen.go", mux, parser.AllErrors); err != nil {
+		t.Fatalf("expected generated mux source to parse: %v\n%s", err, mux)
+	}
+}
+
+func TestBuildGoClientFileEmitsMultipartMethod(t *testing.T) {
+	file, msgIndex := multipartTestFile()
+
+	client, err := buildGoClientFile(file, msgIndex, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoClientFile: %v", err)
+	}
+
+	checks := []string{
+		"func (c *LibraryCapi) GetLibraryBookDetailV1(ctx context.Context, req *GetBookReq) (func() (*Book, error), func() (*Library, error), func())",
+		"\"application/protobuf-parts\"",
+		"reader = NewStreamReader(resp.Body, 0)",
+		// A body that ends early is a server-side abort, not an absent part.
+		"multipart response ended before part %v",
+		"return DecodeBook(payload)",
+		"return DecodeLibrary(payload)",
+	}
+	for _, check := range checks {
+		if !strings.Contains(client, check) {
+			t.Fatalf("expected generated client to contain %q, got:\n%s", check, client)
+		}
+	}
+	if strings.Contains(client, "DecodeBookDetailRes") {
+		t.Fatalf("multipart client must decode parts, not the wrapper message, got:\n%s", client)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "client.gen.go", client, parser.AllErrors); err != nil {
+		t.Fatalf("expected generated client source to parse: %v\n%s", err, client)
+	}
+}
+
+func TestBuildGoMuxFileRejectsMultipartMisuse(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*ir.File, map[string]ir.Message)
+		wantSub string
+	}{
+		{
+			name: "ScalarPart",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				out := idx["example.BookDetailRes"]
+				out.Fields[1] = ir.Field{Name: "count", ProtoName: "count", Number: 2, Kind: ir.KindInt32}
+				idx["example.BookDetailRes"] = out
+			},
+			wantSub: "must be a message",
+		},
+		{
+			name: "RepeatedPart",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				out := idx["example.BookDetailRes"]
+				out.Fields[1].IsRepeated = true
+				idx["example.BookDetailRes"] = out
+			},
+			wantSub: "cannot be repeated",
+		},
+		{
+			name: "SinglePart",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				out := idx["example.BookDetailRes"]
+				out.Fields = out.Fields[:1]
+				idx["example.BookDetailRes"] = out
+			},
+			wantSub: "at least two fields",
+		},
+		{
+			name: "NonContiguousFieldNumbers",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				out := idx["example.BookDetailRes"]
+				out.Fields[1].Number = 7
+				idx["example.BookDetailRes"] = out
+			},
+			wantSub: "contiguous from 1",
+		},
+		{
+			name: "DuplicatePartType",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				out := idx["example.BookDetailRes"]
+				out.Fields[1].MessageFullName = "example.Book"
+				idx["example.BookDetailRes"] = out
+			},
+			wantSub: "repeats part type",
+		},
+		{
+			name: "GoIgnorePart",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				out := idx["example.BookDetailRes"]
+				out.Fields[1].GoIgnore = true
+				idx["example.BookDetailRes"] = out
+			},
+			wantSub: "cannot use cp.go_ignore",
+		},
+		{
+			name: "Streaming",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				f.Services[0].Methods[0].IsStreamingServer = true
+			},
+			wantSub: "cannot also be streaming",
+		},
+		{
+			name: "GoCustom",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				f.Services[0].Methods[0].GoCustom = true
+			},
+			wantSub: "cannot also use cp.go_custom",
+		},
+		{
+			name: "Audit",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				f.Services[0].Methods[0].Audit = true
+			},
+			wantSub: "cannot also use cp.audit",
+		},
+		{
+			name: "CompressionNotNever",
+			mutate: func(f *ir.File, idx map[string]ir.Message) {
+				f.Services[0].Methods[0].CompressionMode = 0
+			},
+			wantSub: "COMPRESSION_MODE_NEVER",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			file, msgIndex := multipartTestFile()
+			// Fields are shared with the slice in file.Messages; copy so a
+			// mutation cannot leak between the mux and client checks.
+			out := msgIndex["example.BookDetailRes"]
+			out.Fields = append([]ir.Field(nil), out.Fields...)
+			msgIndex["example.BookDetailRes"] = out
+			tc.mutate(&file, msgIndex)
+
+			if _, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, ""); err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected mux error containing %q, got %v", tc.wantSub, err)
+			}
+			if _, err := buildGoClientFile(file, msgIndex, file.GoPackage, ""); err == nil || !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("expected client error containing %q, got %v", tc.wantSub, err)
+			}
+		})
+	}
+}
+
+func TestBuildGoMuxUtilSourceEmitsPartsRuntime(t *testing.T) {
+	src := string(buildGoMuxUtilSource("apigen", false))
+	checks := []string{
+		"type PartsWriter struct",
+		"func NewPartsWriter(w http.ResponseWriter) *PartsWriter",
+		"func (p *PartsWriter) Write(payload []byte) error",
+		// Aborting drops the connection so the short body is detectable.
+		"func (p *PartsWriter) Abort(ctx context.Context, err error)",
+		"panic(http.ErrAbortHandler)",
+		"h.Set(\"Content-Type\", \"application/protobuf-parts\")",
+	}
+	for _, check := range checks {
+		if !strings.Contains(src, check) {
+			t.Fatalf("expected mux util source to contain %q", check)
+		}
+	}
+}

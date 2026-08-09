@@ -50,6 +50,12 @@ message CheckoutBookReq {
   bytes signature = 5 [(buf.validate.field).bytes.len = 64];
 }
 
+// The parts of a multipart response, in wire order.
+message BookDetailRes {
+  Book book = 1;
+  Library library = 2;
+}
+
 service LibraryService {
   rpc GetLibraryV1(cp.Empty) returns (Library);
   rpc GetLibraryBookV1(GetBookReq) returns (Book);
@@ -64,6 +70,12 @@ service LibraryService {
   // corrupt the upgraded connection, so disable response compression
   // regardless of the mux-level config.
   rpc GetLibraryEventsV1(cp.Empty) returns (cp.Empty) {
+    option (cp.compression) = COMPRESSION_MODE_NEVER;
+  }
+  // Multipart: the book is written and flushed as its own frame before the
+  // much larger library is computed, so the caller can render it immediately.
+  rpc GetLibraryBook_DetailV1(GetBookReq) returns (BookDetailRes) {
+    option (cp.multipart_response) = true;
     option (cp.compression) = COMPRESSION_MODE_NEVER;
   }
 }

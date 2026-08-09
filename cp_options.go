@@ -173,3 +173,12 @@ var E_Url = &protoimpl.ExtensionInfo{
 	Tag:           "bytes,50034,opt,name=url",
 	Filename:      OptionsProtoPath,
 }
+
+var E_MultipartResponse = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+	ExtensionType: (*bool)(nil),
+	Field:         50035,
+	Name:          "cp.multipart_response",
+	Tag:           "varint,50035,opt,name=multipart_response",
+	Filename:      OptionsProtoPath,
+}

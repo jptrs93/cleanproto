@@ -155,6 +155,7 @@ func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string,
 		OutputEmpty     bool
 		ClientStreaming bool
 		ServerStreaming bool
+		Parts           []multipartPart
 	}
 	type clientService struct {
 		Name    string
@@ -209,6 +210,14 @@ func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string,
 			if !m.IsStreamingClient && inType != "Empty" {
 				needsBytes = true
 			}
+			var parts []multipartPart
+			if m.MultipartResponse {
+				p, err := resolveMultipartParts(m, msgIndex)
+				if err != nil {
+					return "", err
+				}
+				parts = p
+			}
 			cs.Methods = append(cs.Methods, clientMethod{
 				Name:            normalizeGoMethodName(m.Name),
 				HTTPMethod:      httpMethod,
@@ -219,6 +228,7 @@ func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string,
 				OutputEmpty:     outType == "Empty",
 				ClientStreaming: m.IsStreamingClient,
 				ServerStreaming: m.IsStreamingServer,
+				Parts:           parts,
 			})
 		}
 		if len(cs.Methods) > 0 {
@@ -285,7 +295,7 @@ func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string,
 	for _, svc := range services {
 		writeGoClientService(&b, svc.Name)
 		for _, method := range svc.Methods {
-			writeGoClientMethod(&b, svc.Name, method.Name, method.HTTPMethod, method.Path, method.Input, method.Output, method.InputEmpty, method.OutputEmpty, method.ClientStreaming, method.ServerStreaming)
+			writeGoClientMethod(&b, svc.Name, method.Name, method.HTTPMethod, method.Path, method.Input, method.Output, method.InputEmpty, method.OutputEmpty, method.ClientStreaming, method.ServerStreaming, method.Parts)
 		}
 	}
 	return b.String(), nil
@@ -396,7 +406,11 @@ func writeGoClientService(b *strings.Builder, name string) {
 	b.WriteString("}\n\n")
 }
 
-func writeGoClientMethod(b *strings.Builder, receiver string, name string, httpMethod string, path string, input string, output string, inputEmpty bool, outputEmpty bool, clientStreaming bool, serverStreaming bool) {
+func writeGoClientMethod(b *strings.Builder, receiver string, name string, httpMethod string, path string, input string, output string, inputEmpty bool, outputEmpty bool, clientStreaming bool, serverStreaming bool, parts []multipartPart) {
+	if len(parts) > 0 {
+		writeGoClientMultipartMethod(b, receiver, name, httpMethod, path, input, inputEmpty, parts)
+		return
+	}
 	if serverStreaming {
 		writeGoClientServerStreamingMethod(b, receiver, name, httpMethod, path, input, output, inputEmpty, clientStreaming)
 		return
@@ -440,6 +454,114 @@ func writeGoClientUnaryMethod(b *strings.Builder, receiver string, name string, 
 	}
 	b.WriteString(", \"application/protobuf\", \"application/protobuf\")\n")
 	writeGoClientUnaryResponse(b, output, outputEmpty)
+}
+
+// writeGoClientMultipartMethod emits one thunk per part plus a cleanup func.
+// The request is issued lazily on the first thunk so that transport, status and
+// decode errors all surface from part 1, mirroring the server side where part
+// 1 is the only part whose failure can still become a status code.
+func writeGoClientMultipartMethod(b *strings.Builder, receiver string, name string, httpMethod string, path string, input string, inputEmpty bool, parts []multipartPart) {
+	b.WriteString("func (c *")
+	b.WriteString(receiver)
+	b.WriteString(") ")
+	b.WriteString(name)
+	b.WriteString("(ctx context.Context")
+	if !inputEmpty {
+		b.WriteString(", req *")
+		b.WriteString(input)
+	}
+	b.WriteString(") (")
+	for _, p := range parts {
+		b.WriteString("func() (*")
+		b.WriteString(p.Type)
+		b.WriteString(", error), ")
+	}
+	b.WriteString("func()) {\n")
+	b.WriteString("\tvar (\n")
+	b.WriteString("\t\treader   *StreamReader\n")
+	b.WriteString("\t\tbody     io.Closer\n")
+	b.WriteString("\t\tstarted  bool\n")
+	b.WriteString("\t\tstartErr error\n")
+	b.WriteString("\t)\n")
+	b.WriteString("\tdone := func() {\n")
+	b.WriteString("\t\tif body != nil {\n")
+	b.WriteString("\t\t\tbody.Close()\n")
+	b.WriteString("\t\t\tbody = nil\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tstart := func() error {\n")
+	b.WriteString("\t\tif started {\n")
+	b.WriteString("\t\t\treturn startErr\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\tstarted = true\n")
+	if !inputEmpty {
+		b.WriteString("\t\tif req == nil {\n")
+		b.WriteString("\t\t\tstartErr = fmt.Errorf(")
+		b.WriteString(strconv.Quote(name + " request is nil"))
+		b.WriteString(")\n")
+		b.WriteString("\t\t\treturn startErr\n")
+		b.WriteString("\t\t}\n")
+	}
+	b.WriteString("\t\tresp, err := c.do(ctx, ")
+	b.WriteString(strconv.Quote(httpMethod))
+	b.WriteString(", ")
+	b.WriteString(strconv.Quote(path))
+	b.WriteString(", ")
+	if inputEmpty {
+		b.WriteString("nil")
+	} else {
+		b.WriteString("bytes.NewReader(req.Encode())")
+	}
+	b.WriteString(", \"application/protobuf\", \"application/protobuf-parts\")\n")
+	b.WriteString("\t\tif err != nil {\n")
+	b.WriteString("\t\t\tstartErr = err\n")
+	b.WriteString("\t\t\treturn startErr\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\tbody = resp.Body\n")
+	b.WriteString("\t\tif resp.StatusCode < 200 || resp.StatusCode >= 300 {\n")
+	b.WriteString("\t\t\tstartErr = c.ErrorHandler(ctx, resp)\n")
+	b.WriteString("\t\t\treturn startErr\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\treader = NewStreamReader(resp.Body, 0)\n")
+	b.WriteString("\t\treturn nil\n")
+	b.WriteString("\t}\n")
+	// The part count is static, so a body that ends early is a server-side
+	// abort rather than an absent trailing part, and must not be reported as
+	// one.
+	b.WriteString("\tnextPart := func(part string) ([]byte, error) {\n")
+	b.WriteString("\t\tif err := start(); err != nil {\n")
+	b.WriteString("\t\t\treturn nil, err\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\tpayload, ok, err := reader.Next()\n")
+	b.WriteString("\t\tif err != nil {\n")
+	b.WriteString("\t\t\treturn nil, err\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\tif !ok {\n")
+	b.WriteString("\t\t\treturn nil, fmt.Errorf(\"multipart response ended before part %v\", part)\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t\treturn payload, nil\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\treturn ")
+	for _, p := range parts {
+		b.WriteString("func() (*")
+		b.WriteString(p.Type)
+		b.WriteString(", error) {\n")
+		b.WriteString("\t\t\tpayload, err := nextPart(")
+		b.WriteString(strconv.Quote(p.Name))
+		b.WriteString(")\n")
+		b.WriteString("\t\t\tif err != nil {\n")
+		b.WriteString("\t\t\t\treturn nil, err\n")
+		b.WriteString("\t\t\t}\n")
+		b.WriteString("\t\t\tif len(payload) == 0 {\n")
+		b.WriteString("\t\t\t\treturn nil, nil\n")
+		b.WriteString("\t\t\t}\n")
+		b.WriteString("\t\t\treturn Decode")
+		b.WriteString(p.Type)
+		b.WriteString("(payload)\n")
+		b.WriteString("\t\t}, ")
+	}
+	b.WriteString("done\n")
+	b.WriteString("}\n\n")
 }
 
 func writeGoClientClientStreamingMethod(b *strings.Builder, receiver string, name string, httpMethod string, path string, input string, output string, outputEmpty bool) {
@@ -593,6 +715,71 @@ func goClientMessageNameByFullName(msgIndex map[string]ir.Message, full string) 
 	return msg.Name, true
 }
 
+// multipartPart is one field of a multipart response message: an
+// independently decodable frame on the wire, and one thunk in the generated
+// signatures.
+type multipartPart struct {
+	Name string
+	Type string
+}
+
+// resolveMultipartParts maps a multipart RPC's response message onto its parts
+// and enforces the rules that make the mapping unambiguous. Field order is wire
+// order, so anything that makes "which field is frame N" a judgement call is
+// rejected here rather than producing a client that silently misreads the body.
+func resolveMultipartParts(m ir.Method, msgIndex map[string]ir.Message) ([]multipartPart, error) {
+	if m.IsStreamingServer || m.IsStreamingClient {
+		return nil, fmt.Errorf("multipart RPC %s cannot also be streaming", m.Name)
+	}
+	if m.GoCustom {
+		return nil, fmt.Errorf("multipart RPC %s cannot also use cp.go_custom", m.Name)
+	}
+	// The audit hook takes a single response value. Rather than pick a part and
+	// call it the response, reject the combination.
+	if m.Audit {
+		return nil, fmt.Errorf("multipart RPC %s cannot also use cp.audit", m.Name)
+	}
+	// A compressor buffers, which defeats the flush between parts.
+	if m.CompressionMode != compressionNever {
+		return nil, fmt.Errorf("multipart RPC %s must set cp.compression = COMPRESSION_MODE_NEVER", m.Name)
+	}
+	out, ok := msgIndex[m.OutputFullName]
+	if !ok {
+		return nil, fmt.Errorf("unknown service output type: %s", m.OutputFullName)
+	}
+	if len(out.Fields) < 2 {
+		return nil, fmt.Errorf("multipart RPC %s response %s needs at least two fields; one part is a unary RPC", m.Name, out.Name)
+	}
+	parts := make([]multipartPart, 0, len(out.Fields))
+	seenTypes := map[string]string{}
+	for i, f := range out.Fields {
+		if f.Kind != ir.KindMessage || f.IsMap {
+			return nil, fmt.Errorf("multipart RPC %s response field %s.%s must be a message; scalars have no self-delimiting encoding", m.Name, out.Name, f.ProtoName)
+		}
+		if f.IsRepeated {
+			return nil, fmt.Errorf("multipart RPC %s response field %s.%s cannot be repeated; a part is one frame", m.Name, out.Name, f.ProtoName)
+		}
+		if f.GoIgnore {
+			return nil, fmt.Errorf("multipart RPC %s response field %s.%s cannot use cp.go_ignore; every field is a part", m.Name, out.Name, f.ProtoName)
+		}
+		if f.Number != i+1 {
+			return nil, fmt.Errorf("multipart RPC %s response %s field numbers must be contiguous from 1; %s is %d", m.Name, out.Name, f.ProtoName, f.Number)
+		}
+		partType, ok := goClientMessageNameByFullName(msgIndex, f.MessageFullName)
+		if !ok {
+			return nil, fmt.Errorf("unknown multipart part type: %s", f.MessageFullName)
+		}
+		// Parts are returned positionally, so two parts of the same type are
+		// silently swappable at every call site.
+		if prev, dup := seenTypes[partType]; dup {
+			return nil, fmt.Errorf("multipart RPC %s response %s repeats part type %s (%s and %s); parts are positional and would be silently swappable", m.Name, out.Name, partType, prev, f.ProtoName)
+		}
+		seenTypes[partType] = f.ProtoName
+		parts = append(parts, multipartPart{Name: ir.GoName(f.ProtoName), Type: partType})
+	}
+	return parts, nil
+}
+
 func goClientNameFromService(name string) string {
 	name = normalizeGoMethodName(name)
 	base := strings.TrimSuffix(name, "Service")
@@ -624,6 +811,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 		PolicyType       int32
 		Compression      int32
 		InputValidatable bool
+		Multipart        bool
+		Parts            []multipartPart
 	}
 	type muxService struct {
 		HandlerName string
@@ -680,6 +869,14 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 					return "", fmt.Errorf("client-streaming RPC %s cannot use a Get* verb; use Post/Put/Patch/Delete", m.Name)
 				}
 			}
+			var parts []multipartPart
+			if m.MultipartResponse {
+				p, err := resolveMultipartParts(m, msgIndex)
+				if err != nil {
+					return "", err
+				}
+				parts = p
+			}
 			method := muxMethod{
 				Name:             m.Name,
 				Handler:          normalizeGoMethodName(m.Name),
@@ -701,6 +898,8 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 				PolicyType:       m.PolicyType,
 				Compression:      m.CompressionMode,
 				InputValidatable: validateNeeds[m.InputFullName],
+				Multipart:        m.MultipartResponse,
+				Parts:            parts,
 			}
 			methods = append(methods, method)
 			svcMethods = append(svcMethods, method)
@@ -852,6 +1051,84 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString(", err, r, w)\n")
 			b.WriteString("\t\t\t\treturn\n")
 			b.WriteString("\t\t\t}\n")
+			return
+		}
+		if method.Multipart {
+			if !method.InputEmpty {
+				b.WriteString("\t\t\treq, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, Decode")
+				b.WriteString(method.Input)
+				b.WriteString(")\n")
+				b.WriteString("\t\t\tif err != nil {\n")
+				b.WriteString("\t\t\t\tHandleReqErr(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", err, r, w)\n")
+				b.WriteString("\t\t\t\treturn\n")
+				b.WriteString("\t\t\t}\n")
+				writeValidateBlock(method, handlerCtxName)
+			}
+			for i, p := range method.Parts {
+				if i > 0 {
+					b.WriteString(", ")
+				} else {
+					b.WriteString("\t\t\t")
+				}
+				b.WriteString("partFn")
+				b.WriteString(p.Name)
+			}
+			b.WriteString(" := h.")
+			b.WriteString(method.Handler)
+			b.WriteString("(")
+			b.WriteString(handlerCtxName)
+			if !method.InputEmpty {
+				b.WriteString(", req")
+			}
+			b.WriteString(")\n")
+			for i, p := range method.Parts {
+				// The first part runs before anything is committed, so its
+				// failure is still a status code. Every later part can only
+				// abort - see PartsWriter.Abort.
+				if i == 0 {
+					b.WriteString("\t\t\tpart")
+					b.WriteString(p.Name)
+					b.WriteString(", err := partFn")
+					b.WriteString(p.Name)
+					b.WriteString("()\n")
+					b.WriteString("\t\t\tif err != nil {\n")
+					b.WriteString("\t\t\t\tHandleReqErr(")
+					b.WriteString(handlerCtxName)
+					b.WriteString(", err, r, w)\n")
+					b.WriteString("\t\t\t\treturn\n")
+					b.WriteString("\t\t\t}\n")
+					b.WriteString("\t\t\tparts := NewPartsWriter(w)\n")
+					b.WriteString("\t\t\tvar partBytes []byte\n")
+				} else {
+					b.WriteString("\t\t\tpart")
+					b.WriteString(p.Name)
+					b.WriteString(", err := partFn")
+					b.WriteString(p.Name)
+					b.WriteString("()\n")
+					b.WriteString("\t\t\tif err != nil {\n")
+					b.WriteString("\t\t\t\tparts.Abort(")
+					b.WriteString(handlerCtxName)
+					b.WriteString(", err)\n")
+					b.WriteString("\t\t\t\treturn\n")
+					b.WriteString("\t\t\t}\n")
+					b.WriteString("\t\t\tpartBytes = nil\n")
+				}
+				b.WriteString("\t\t\tif part")
+				b.WriteString(p.Name)
+				b.WriteString(" != nil {\n")
+				b.WriteString("\t\t\t\tpartBytes = part")
+				b.WriteString(p.Name)
+				b.WriteString(".Encode()\n")
+				b.WriteString("\t\t\t}\n")
+				b.WriteString("\t\t\tif err := parts.Write(partBytes); err != nil {\n")
+				b.WriteString("\t\t\t\tparts.Abort(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", err)\n")
+				b.WriteString("\t\t\t\treturn\n")
+				b.WriteString("\t\t\t}\n")
+			}
 			return
 		}
 		if method.Streaming && method.ClientStreaming {
@@ -1215,7 +1492,18 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 				b.WriteString(", *")
 				b.WriteString(m.Input)
 			}
-			if m.Streaming {
+			if m.Multipart {
+				b.WriteString(") (")
+				for i, p := range m.Parts {
+					if i > 0 {
+						b.WriteString(", ")
+					}
+					b.WriteString("func() (*")
+					b.WriteString(p.Type)
+					b.WriteString(", error)")
+				}
+				b.WriteString(")\n")
+			} else if m.Streaming {
 				b.WriteString(") iter.Seq2[*")
 				b.WriteString(m.Output)
 				b.WriteString(", error]\n")
@@ -1287,7 +1575,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString(postAuthHandlerName)
 			b.WriteString(", ")
 			b.WriteString(compressionModeLiteral(m.Compression))
-			if m.Streaming {
+			if m.Streaming || m.Multipart {
 				b.WriteString(", true))\n")
 			} else {
 				b.WriteString(", false))\n")
@@ -1343,6 +1631,9 @@ func policyLiteral(policyType int32, scopes []string) string {
 	b.WriteString("}}")
 	return b.String()
 }
+
+// compressionNever mirrors cp.COMPRESSION_MODE_NEVER.
+const compressionNever = int32(2)
 
 func compressionModeLiteral(mode int32) string {
 	switch mode {
@@ -3999,6 +4290,55 @@ func (s *StreamWriter) Finish(ctx context.Context, err error) {
 func SetStreamHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "application/protobuf-stream")
+	h.Set("Cache-Control", "no-cache, no-transform")
+	h.Set("X-Accel-Buffering", "no")
+}
+
+// PartsWriter writes a multipart response: one uvarint length-prefixed frame
+// per part, flushed after each, with the headers committed on the first frame.
+// It differs from StreamWriter only in how it ends - see Abort.
+type PartsWriter struct {
+	w       http.ResponseWriter
+	control *http.ResponseController
+	started bool
+}
+
+func NewPartsWriter(w http.ResponseWriter) *PartsWriter {
+	return &PartsWriter{w: w, control: http.NewResponseController(w)}
+}
+
+// Write emits one part. An absent part is a zero-length frame, so the frame
+// count always matches the number of parts the contract declares.
+func (p *PartsWriter) Write(payload []byte) error {
+	if !p.started {
+		p.started = true
+		SetPartsHeaders(p.w)
+	}
+	if err := WriteStreamFrame(p.w, payload); err != nil {
+		return err
+	}
+	return p.control.Flush()
+}
+
+// Abort ends a response that has already been committed, so the status code is
+// spent and the failure cannot be reported as a 4xx/5xx. Panicking with
+// http.ErrAbortHandler drops the connection without the terminating chunk,
+// leaving the body short. Unlike a stream, a multipart response has a part
+// count the client knows statically, so a short body is unambiguously a
+// failure rather than an absent trailing part.
+func (p *PartsWriter) Abort(ctx context.Context, err error) {
+	slog.ErrorContext(ctx, fmt.Sprintf("multipart response aborted after commit: %v", err))
+	panic(http.ErrAbortHandler)
+}
+
+// SetPartsHeaders sets the response headers for a multipart RPC. The content
+// type is distinct from application/protobuf-stream so that a bounded part
+// sequence cannot be mistaken for an unbounded stream. Buffering is disabled
+// for the same reasons as SetStreamHeaders: a proxy that holds the body defeats
+// the flush between parts.
+func SetPartsHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	h.Set("Content-Type", "application/protobuf-parts")
 	h.Set("Cache-Control", "no-cache, no-transform")
 	h.Set("X-Accel-Buffering", "no")
 }

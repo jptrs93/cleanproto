@@ -168,6 +168,15 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			if m.URL != "" {
 				path = m.URL
 			}
+			// A multipart body is a frame sequence, not one encoded message, so
+			// the unary client emitted below would silently misread it. There is
+			// no JS multipart client yet, and erroring here would stop a whole
+			// contract from generating a JS client over one RPC, so the method
+			// is left out and calling it is a missing-function error. Skipped
+			// before the imports below so it does not pull in an unused decoder.
+			if m.MultipartResponse {
+				continue
+			}
 			inType, ok := messageNameByFullName(msgIndex, m.InputFullName)
 			if !ok {
 				return "", fmt.Errorf("unknown method input type: %s", m.InputFullName)

@@ -247,3 +247,61 @@ service DemoService {
 		t.Fatalf("expected URL override, got %q", methods[0].URL)
 	}
 }
+
+func TestParseMultipartResponseFromMethodOptions(t *testing.T) {
+	const protoSource = `syntax = "proto3";
+
+package demo;
+
+import "options.proto";
+
+option go_package = "demo";
+
+message Head {
+  string id = 1;
+}
+
+message Body {
+  bytes blob = 1;
+}
+
+message HeadBodyRes {
+  Head head = 1;
+  Body body = 2;
+}
+
+service DemoService {
+	 rpc GetPlainV1(cp.Empty) returns (HeadBodyRes);
+	 rpc GetPartsV1(cp.Empty) returns (HeadBodyRes) {
+	   option (cp.multipart_response) = true;
+	   option (cp.compression) = COMPRESSION_MODE_NEVER;
+	 }
+}
+`
+
+	dir := t.TempDir()
+	protoPath := filepath.Join(dir, "demo.proto")
+	if err := os.WriteFile(protoPath, []byte(protoSource), 0o644); err != nil {
+		t.Fatalf("write proto: %v", err)
+	}
+	optionsPath := filepath.Join(dir, "options.proto")
+	if err := os.WriteFile(optionsPath, []byte(optionsProtoSource), 0o644); err != nil {
+		t.Fatalf("write options proto: %v", err)
+	}
+
+	p := Parser{ImportPaths: []string{dir}}
+	files, err := p.Parse(context.Background(), []string{"demo.proto"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	methods := files[0].Services[0].Methods
+	if len(methods) != 2 {
+		t.Fatalf("expected 2 methods, got %d", len(methods))
+	}
+	if methods[0].MultipartResponse {
+		t.Fatalf("expected GetPlainV1 to default to non-multipart")
+	}
+	if !methods[1].MultipartResponse {
+		t.Fatalf("expected GetPartsV1 to be multipart")
+	}
+}

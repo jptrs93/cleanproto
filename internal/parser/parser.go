@@ -221,6 +221,10 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 			if err != nil {
 				return nil, err
 			}
+			multipartResponse, err := multipartResponseFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
 			methods = append(methods, ir.Method{
 				Name:              string(m.Name()),
 				InputFullName:     string(m.Input().FullName()),
@@ -234,6 +238,7 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 				PolicyType:        policyType,
 				PolicyScopes:      policyScopes,
 				CompressionMode:   compressionMode,
+				MultipartResponse: multipartResponse,
 			})
 		}
 		outSvc.Methods = methods

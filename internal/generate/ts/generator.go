@@ -91,6 +91,11 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 				// Pure server-streaming RPCs are not yet implemented in the TS client; skip.
 				continue
 			}
+			// See the JS generator: no TS multipart client yet, and the method is
+			// skipped rather than failing the whole contract.
+			if m.MultipartResponse {
+				continue
+			}
 			httpMethod, path, ok := deriveHTTP(m.Name)
 			if !ok {
 				continue

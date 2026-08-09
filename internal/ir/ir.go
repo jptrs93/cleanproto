@@ -27,6 +27,7 @@ type Method struct {
 	PolicyType        int32
 	PolicyScopes      []string
 	CompressionMode   int32
+	MultipartResponse bool
 }
 
 type Enum struct {
