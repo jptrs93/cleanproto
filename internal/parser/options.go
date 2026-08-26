@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/jptrs93/cleanproto"
+	"github.com/jptrs93/cleanproto/internal/ir"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -261,20 +262,16 @@ func urlFromMethodOptions(method protoreflect.MethodDescriptor) (string, error) 
 	return str, nil
 }
 
-func auditFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) {
-	opts, ok := method.Options().(*descriptorpb.MethodOptions)
-	if !ok || opts == nil {
-		return false, nil
+func auditFromMethodOptions(method protoreflect.MethodDescriptor) (ir.AuditMode, error) {
+	raw, err := enumFromMethodOptions(method, 50032)
+	if err != nil {
+		return 0, err
 	}
-	if !proto.HasExtension(opts, E_Audit) {
-		return false, nil
+	mode := ir.AuditMode(raw)
+	if mode < ir.AuditModeUnspecified || mode > ir.AuditModeFull {
+		return 0, fmt.Errorf("unknown cp.AuditMode value %d on %s", raw, method.FullName())
 	}
-	val := proto.GetExtension(opts, E_Audit)
-	b, ok := val.(bool)
-	if !ok {
-		return false, nil
-	}
-	return b, nil
+	return mode, nil
 }
 
 func multipartResponseFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) {
@@ -294,6 +291,13 @@ func multipartResponseFromMethodOptions(method protoreflect.MethodDescriptor) (b
 }
 
 func compressionFromMethodOptions(method protoreflect.MethodDescriptor) (int32, error) {
+	return enumFromMethodOptions(method, 50033)
+}
+
+// enumFromMethodOptions reads an enum-typed method-option extension by field
+// number, falling back to the unknown-fields wire when the extension was not
+// registered with the descriptor pool.
+func enumFromMethodOptions(method protoreflect.MethodDescriptor, fieldNumber protowire.Number) (int32, error) {
 	opts, ok := method.Options().(*descriptorpb.MethodOptions)
 	if !ok || opts == nil {
 		return 0, nil
@@ -301,7 +305,7 @@ func compressionFromMethodOptions(method protoreflect.MethodDescriptor) (int32, 
 	found := false
 	mode := int32(0)
 	opts.ProtoReflect().Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
-		if !fd.IsExtension() || fd.Number() != 50033 {
+		if !fd.IsExtension() || fd.Number() != fieldNumber {
 			return true
 		}
 		found = true
@@ -318,7 +322,7 @@ func compressionFromMethodOptions(method protoreflect.MethodDescriptor) (int32, 
 			return 0, protowire.ParseError(n)
 		}
 		unknown = unknown[n:]
-		if num != 50033 {
+		if num != fieldNumber {
 			m := protowire.ConsumeFieldValue(num, typ, unknown)
 			if m < 0 {
 				return 0, protowire.ParseError(m)

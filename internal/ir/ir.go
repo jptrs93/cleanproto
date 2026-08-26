@@ -21,7 +21,7 @@ type Method struct {
 	GoCustom          bool
 	OperationID       string
 	URL               string
-	Audit             bool
+	Audit             AuditMode
 	IsStreamingClient bool
 	IsStreamingServer bool
 	PolicyType        int32
@@ -29,6 +29,29 @@ type Method struct {
 	CompressionMode   int32
 	MultipartResponse bool
 }
+
+// AuditMode mirrors the cp.AuditMode enum: what an audited method records.
+// Unspecified (the option absent) and None both mean no audit call at all;
+// None exists so a contract can state the choice was deliberate.
+type AuditMode int32
+
+const (
+	AuditModeUnspecified AuditMode = 0
+	AuditModeNone        AuditMode = 1
+	AuditModeOperation   AuditMode = 2
+	AuditModeRequest     AuditMode = 3
+	AuditModeResponse    AuditMode = 4
+	AuditModeFull        AuditMode = 5
+)
+
+// Enabled reports whether the method gets an audit call at all.
+func (m AuditMode) Enabled() bool { return m >= AuditModeOperation }
+
+// RecordsRequest reports whether the audit call carries the request payload.
+func (m AuditMode) RecordsRequest() bool { return m == AuditModeRequest || m == AuditModeFull }
+
+// RecordsResponse reports whether the audit call carries the response payload.
+func (m AuditMode) RecordsResponse() bool { return m == AuditModeResponse || m == AuditModeFull }
 
 type Enum struct {
 	Name     string
