@@ -149,10 +149,10 @@ var E_OperationId = &protoimpl.ExtensionInfo{
 
 var E_Audit = &protoimpl.ExtensionInfo{
 	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
-	ExtensionType: (*bool)(nil),
+	ExtensionType: (*int32)(nil),
 	Field:         50032,
 	Name:          "cp.audit",
-	Tag:           "varint,50032,opt,name=audit",
+	Tag:           "varint,50032,opt,name=audit,enum=cp.AuditMode",
 	Filename:      OptionsProtoPath,
 }
 

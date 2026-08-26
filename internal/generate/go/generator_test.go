@@ -48,13 +48,37 @@ func TestBuildGoMuxFileUsesToAuditWhenAuditModelsExist(t *testing.T) {
 					Name:           "PostAuditV1",
 					InputFullName:  "example.AuditReq",
 					OutputFullName: "example.AuditResp",
-					Audit:          true,
+					Audit:          ir.AuditModeFull,
 				},
 				{
 					Name:           "PostPlainV1",
 					InputFullName:  "example.PlainReq",
 					OutputFullName: "example.PlainResp",
-					Audit:          true,
+					Audit:          ir.AuditModeFull,
+				},
+				{
+					Name:           "PostOperationV1",
+					InputFullName:  "example.PlainReq",
+					OutputFullName: "example.PlainResp",
+					Audit:          ir.AuditModeOperation,
+				},
+				{
+					Name:           "PostRequestOnlyV1",
+					InputFullName:  "example.PlainReq",
+					OutputFullName: "example.PlainResp",
+					Audit:          ir.AuditModeRequest,
+				},
+				{
+					Name:           "PostResponseOnlyV1",
+					InputFullName:  "example.PlainReq",
+					OutputFullName: "example.PlainResp",
+					Audit:          ir.AuditModeResponse,
+				},
+				{
+					Name:           "PostUnauditedV1",
+					InputFullName:  "example.PlainReq",
+					OutputFullName: "example.PlainResp",
+					Audit:          ir.AuditModeNone,
 				},
 			},
 		}},
@@ -75,6 +99,18 @@ func TestBuildGoMuxFileUsesToAuditWhenAuditModelsExist(t *testing.T) {
 	}
 	if !strings.Contains(mux, "audit(authCtx, \"PostPlainV1\", err, req, res)") {
 		t.Fatalf("expected plain request/response payloads to stay unchanged, got:\n%s", mux)
+	}
+	if !strings.Contains(mux, "audit(authCtx, \"PostOperationV1\", err, nil, nil)") {
+		t.Fatalf("expected operation-only audit to carry no payloads, got:\n%s", mux)
+	}
+	if !strings.Contains(mux, "audit(authCtx, \"PostRequestOnlyV1\", err, req, nil)") {
+		t.Fatalf("expected request-only audit to carry the request alone, got:\n%s", mux)
+	}
+	if !strings.Contains(mux, "audit(authCtx, \"PostResponseOnlyV1\", err, nil, res)") {
+		t.Fatalf("expected response-only audit to carry the response alone, got:\n%s", mux)
+	}
+	if strings.Contains(mux, "\"PostUnauditedV1\"") {
+		t.Fatalf("expected AUDIT_MODE_NONE to emit no audit call, got:\n%s", mux)
 	}
 }
 
@@ -1308,7 +1344,7 @@ func TestBuildGoMuxFileRejectsMultipartMisuse(t *testing.T) {
 		{
 			name: "Audit",
 			mutate: func(f *ir.File, idx map[string]ir.Message) {
-				f.Services[0].Methods[0].Audit = true
+				f.Services[0].Methods[0].Audit = ir.AuditModeOperation
 			},
 			wantSub: "cannot also use cp.audit",
 		},

@@ -734,9 +734,11 @@ func resolveMultipartParts(m ir.Method, msgIndex map[string]ir.Message) ([]multi
 	if m.GoCustom {
 		return nil, fmt.Errorf("multipart RPC %s cannot also use cp.go_custom", m.Name)
 	}
-	// The audit hook takes a single response value. Rather than pick a part and
-	// call it the response, reject the combination.
-	if m.Audit {
+	// The audit hook takes a single response value and the multipart path
+	// emits no audit call at all. Rather than pick a part and call it the
+	// response — or accept a mode and silently not audit — reject the
+	// combination.
+	if m.Audit.Enabled() {
 		return nil, fmt.Errorf("multipart RPC %s cannot also use cp.audit", m.Name)
 	}
 	// A compressor buffers, which defeats the flush between parts.
@@ -800,7 +802,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 		InputEmpty       bool
 		OutEmpty         bool
 		GoCustom         bool
-		Audit            bool
+		Audit            ir.AuditMode
 		InputAudit       bool
 		OutputAudit      bool
 		OperationID      string
@@ -857,6 +859,14 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 				if m.GoCustom {
 					return "", fmt.Errorf("streaming RPC %s cannot also use cp.go_custom", m.Name)
 				}
+			}
+			// A streamed payload is never handed to the audit hook, so a mode
+			// claiming to record one would silently record nil instead.
+			if m.IsStreamingServer && m.Audit.RecordsResponse() {
+				return "", fmt.Errorf("streaming RPC %s cannot use a cp.audit mode that records the response", m.Name)
+			}
+			if m.IsStreamingClient && m.Audit.RecordsRequest() {
+				return "", fmt.Errorf("client-streaming RPC %s cannot use a cp.audit mode that records the request", m.Name)
 			}
 			if m.IsStreamingClient {
 				if in.Name == "Empty" || strings.HasSuffix(m.InputFullName, ".Empty") {
@@ -1180,7 +1190,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString("\t\t\t\t\tbreak\n")
 			b.WriteString("\t\t\t\t}\n")
 			b.WriteString("\t\t\t}\n")
-			if method.Audit {
+			if method.Audit.Enabled() {
 				opID := method.OperationID
 				if opID == "" {
 					opID = method.Name
@@ -1234,30 +1244,25 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString("\t\t\t\t\tbreak\n")
 			b.WriteString("\t\t\t\t}\n")
 			b.WriteString("\t\t\t}\n")
-			if method.Audit {
+			if method.Audit.Enabled() {
 				opID := method.OperationID
 				if opID == "" {
 					opID = method.Name
 				}
-				reqPayloadExpr := "req"
-				if method.InputAudit {
-					reqPayloadExpr = "req.ToAudit()"
+				reqPayloadExpr := "nil"
+				if !method.InputEmpty && method.Audit.RecordsRequest() {
+					reqPayloadExpr = "req"
+					if method.InputAudit {
+						reqPayloadExpr = "req.ToAudit()"
+					}
 				}
-				if method.InputEmpty {
-					b.WriteString("\t\t\taudit(")
-					b.WriteString(handlerCtxName)
-					b.WriteString(", ")
-					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", streamErr, nil, nil)\n")
-				} else {
-					b.WriteString("\t\t\taudit(")
-					b.WriteString(handlerCtxName)
-					b.WriteString(", ")
-					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", streamErr, ")
-					b.WriteString(reqPayloadExpr)
-					b.WriteString(", nil)\n")
-				}
+				b.WriteString("\t\t\taudit(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", ")
+				b.WriteString(fmt.Sprintf("%q", opID))
+				b.WriteString(", streamErr, ")
+				b.WriteString(reqPayloadExpr)
+				b.WriteString(", nil)\n")
 			}
 			b.WriteString("\t\t\tstream.Finish(")
 			b.WriteString(handlerCtxName)
@@ -1297,8 +1302,11 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString("\t\t\t\t}\n")
 			b.WriteString("\t\t\t}\n")
 			writeAudit := func(errExpr, respExpr string) {
-				if !method.Audit {
+				if !method.Audit.Enabled() {
 					return
+				}
+				if !method.Audit.RecordsResponse() {
+					respExpr = "nil"
 				}
 				opID := method.OperationID
 				if opID == "" {
@@ -1371,30 +1379,25 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 				b.WriteString(handlerCtxName)
 				b.WriteString(", req)\n")
 			}
-			if method.Audit {
+			if method.Audit.Enabled() {
 				opID := method.OperationID
 				if opID == "" {
 					opID = method.Name
 				}
-				reqPayloadExpr := "req"
-				if method.InputAudit {
-					reqPayloadExpr = "req.ToAudit()"
+				reqPayloadExpr := "nil"
+				if !method.InputEmpty && method.Audit.RecordsRequest() {
+					reqPayloadExpr = "req"
+					if method.InputAudit {
+						reqPayloadExpr = "req.ToAudit()"
+					}
 				}
-				if method.InputEmpty {
-					b.WriteString("\t\t\taudit(")
-					b.WriteString(handlerCtxName)
-					b.WriteString(", ")
-					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", err, nil, nil)\n")
-				} else {
-					b.WriteString("\t\t\taudit(")
-					b.WriteString(handlerCtxName)
-					b.WriteString(", ")
-					b.WriteString(fmt.Sprintf("%q", opID))
-					b.WriteString(", err, ")
-					b.WriteString(reqPayloadExpr)
-					b.WriteString(", nil)\n")
-				}
+				b.WriteString("\t\t\taudit(")
+				b.WriteString(handlerCtxName)
+				b.WriteString(", ")
+				b.WriteString(fmt.Sprintf("%q", opID))
+				b.WriteString(", err, ")
+				b.WriteString(reqPayloadExpr)
+				b.WriteString(", nil)\n")
 			}
 			b.WriteString("\t\t\tif err != nil {\n")
 			b.WriteString("\t\t\t\tHandleReqErr(")
@@ -1418,38 +1421,34 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			b.WriteString(handlerCtxName)
 			b.WriteString(", req)\n")
 		}
-		if method.Audit {
+		if method.Audit.Enabled() {
 			opID := method.OperationID
 			if opID == "" {
 				opID = method.Name
 			}
-			reqPayloadExpr := "req"
-			if method.InputAudit {
-				reqPayloadExpr = "req.ToAudit()"
+			reqPayloadExpr := "nil"
+			if !method.InputEmpty && method.Audit.RecordsRequest() {
+				reqPayloadExpr = "req"
+				if method.InputAudit {
+					reqPayloadExpr = "req.ToAudit()"
+				}
 			}
-			respPayloadExpr := "res"
-			if method.OutputAudit {
-				respPayloadExpr = "res.ToAudit()"
+			respPayloadExpr := "nil"
+			if method.Audit.RecordsResponse() {
+				respPayloadExpr = "res"
+				if method.OutputAudit {
+					respPayloadExpr = "res.ToAudit()"
+				}
 			}
-			if method.InputEmpty {
-				b.WriteString("\t\t\taudit(")
-				b.WriteString(handlerCtxName)
-				b.WriteString(", ")
-				b.WriteString(fmt.Sprintf("%q", opID))
-				b.WriteString(", err, nil, ")
-				b.WriteString(respPayloadExpr)
-				b.WriteString(")\n")
-			} else {
-				b.WriteString("\t\t\taudit(")
-				b.WriteString(handlerCtxName)
-				b.WriteString(", ")
-				b.WriteString(fmt.Sprintf("%q", opID))
-				b.WriteString(", err, ")
-				b.WriteString(reqPayloadExpr)
-				b.WriteString(", ")
-				b.WriteString(respPayloadExpr)
-				b.WriteString(")\n")
-			}
+			b.WriteString("\t\t\taudit(")
+			b.WriteString(handlerCtxName)
+			b.WriteString(", ")
+			b.WriteString(fmt.Sprintf("%q", opID))
+			b.WriteString(", err, ")
+			b.WriteString(reqPayloadExpr)
+			b.WriteString(", ")
+			b.WriteString(respPayloadExpr)
+			b.WriteString(")\n")
 		}
 		b.WriteString("\t\t\tRespond(")
 		b.WriteString(handlerCtxName)
@@ -1457,7 +1456,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 	}
 	methodsHaveAudit := func(methods []muxMethod) bool {
 		for _, m := range methods {
-			if m.Audit {
+			if m.Audit.Enabled() {
 				return true
 			}
 		}
@@ -3685,11 +3684,12 @@ func computeAuditMessages(file ir.File, msgIndex map[string]ir.Message) map[stri
 	}
 	for _, svc := range file.Services {
 		for _, m := range svc.Methods {
-			if !m.Audit {
-				continue
+			if m.Audit.RecordsRequest() {
+				addSeed(m.InputFullName)
 			}
-			addSeed(m.InputFullName)
-			addSeed(m.OutputFullName)
+			if m.Audit.RecordsResponse() {
+				addSeed(m.OutputFullName)
+			}
 		}
 	}
 	for len(queue) > 0 {
