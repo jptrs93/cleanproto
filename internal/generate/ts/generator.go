@@ -482,6 +482,8 @@ type tsFileData struct {
 	NeedsDuration        bool
 	NeedsTimestampNative bool
 	NeedsDurationBigInt  bool
+	NeedsMapSortString   bool
+	NeedsMapSortInt      bool
 }
 
 type tsMessage struct {
@@ -526,6 +528,14 @@ func buildTSFileData(file ir.File, msgIndex map[string]ir.Message) (tsFileData, 
 			}
 			if effType == "bigint" && field.IsDuration {
 				data.NeedsDurationBigInt = true
+			}
+			if field.IsMap {
+				switch field.MapKeyKind {
+				case ir.KindString, ir.KindBool:
+					data.NeedsMapSortString = true
+				default:
+					data.NeedsMapSortInt = true
+				}
 			}
 		}
 		data.Messages = append(data.Messages, tsMsg)
@@ -602,6 +612,8 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			b.WriteString(").length > 0) {\n")
 			b.WriteString("        for (const [rawKey, value] of Object.entries(message.")
 			b.WriteString(field.Name)
+			b.WriteString(").sort(")
+			b.WriteString(mapEntryComparator(field.MapKeyKind))
 			b.WriteString(")) {\n")
 			b.WriteString("            const key = ")
 			b.WriteString(tsMapKeyCast(field.MapKeyKind))
@@ -1323,6 +1335,15 @@ func jsIsPackable(kind ir.Kind) bool {
 	}
 }
 
+func mapEntryComparator(kind ir.Kind) string {
+	switch kind {
+	case ir.KindString, ir.KindBool:
+		return "compareMapEntriesString"
+	default:
+		return "compareMapEntriesInt"
+	}
+}
+
 func tsMapKeyCast(kind ir.Kind) string {
 	switch kind {
 	case ir.KindString:
@@ -1460,8 +1481,14 @@ func tsDecodeMapField(fieldName string, field ir.Field, msgIndex map[string]ir.M
 	b.WriteString(fieldName)
 	b.WriteString(" = {}; }\n")
 	b.WriteString("                ")
-	b.WriteString(fieldName)
-	b.WriteString("[String(key)] = value;\n")
+	if field.MapValueKind == ir.KindMessage {
+		b.WriteString("if (value !== undefined) { ")
+		b.WriteString(fieldName)
+		b.WriteString("[String(key)] = value; }\n")
+	} else {
+		b.WriteString(fieldName)
+		b.WriteString("[String(key)] = value;\n")
+	}
 	return b.String(), needsReadInt64, nil
 }
 

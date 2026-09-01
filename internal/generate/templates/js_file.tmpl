@@ -25,6 +25,39 @@ const tag = (field, wire) => (field << 3) | wire;
 {{.DecodeFunc}}
 
 {{end}}
+{{- if .NeedsMapSortString}}
+function compareMapEntriesString(a, b) {
+    const x = a[0];
+    const y = b[0];
+    const n = x.length < y.length ? x.length : y.length;
+    for (let i = 0; i < n; i++) {
+        let cx = x.charCodeAt(i);
+        let cy = y.charCodeAt(i);
+        if (cx !== cy) {
+            if (cx >= 0xd800 && cx < 0xe000) cx += 0x2800;
+            if (cy >= 0xd800 && cy < 0xe000) cy += 0x2800;
+            return cx - cy;
+        }
+    }
+    return x.length - y.length;
+}
+{{- end}}
+{{- if .NeedsMapSortInt}}
+function compareMapEntriesInt(a, b) {
+    const x = a[0];
+    const y = b[0];
+    const xn = x.charCodeAt(0) === 45;
+    const yn = y.charCodeAt(0) === 45;
+    if (xn !== yn) return xn ? -1 : 1;
+    let r;
+    if (x.length !== y.length) {
+        r = x.length < y.length ? -1 : 1;
+    } else {
+        r = x < y ? -1 : x > y ? 1 : 0;
+    }
+    return xn ? -r : r;
+}
+{{- end}}
 {{- if .NeedsReadInt64}}
 function readInt64(reader, method) {
     const value = reader[method]();

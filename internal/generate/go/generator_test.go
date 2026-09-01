@@ -1393,3 +1393,23 @@ func TestBuildGoMuxUtilSourceEmitsPartsRuntime(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadUtilSourceSortsMapKeys(t *testing.T) {
+	src, err := loadUtilSource("example")
+	if err != nil {
+		t.Fatalf("loadUtilSource: %v", err)
+	}
+	source := string(src)
+	if !strings.Contains(source, "sort.Slice(keys, func(i, j int) bool { return lessMapKey(keys[i], keys[j]) })") {
+		t.Fatalf("expected AppendMap to sort map keys, got:\n%s", source)
+	}
+	if !strings.Contains(source, "\t\"sort\"\n") {
+		t.Fatalf("expected util source to import sort")
+	}
+	if !strings.Contains(source, "func lessMapKey[K comparable](a, b K) bool {") {
+		t.Fatalf("expected util source to define lessMapKey")
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "util.gen.go", source, parser.AllErrors); err != nil {
+		t.Fatalf("expected generated util source to parse: %v\n%s", err, source)
+	}
+}

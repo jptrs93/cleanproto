@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"io"
 	"math"
+	"sort"
 	"time"
 	"unicode/utf8"
 )
@@ -1654,12 +1655,39 @@ func AppendMap[K comparable, V any](
 	appendKey func([]byte, K) []byte,
 	appendValue func([]byte, V) []byte,
 ) []byte {
-	for key, value := range m {
+	if len(m) == 0 {
+		return b
+	}
+	keys := make([]K, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return lessMapKey(keys[i], keys[j]) })
+	for _, key := range keys {
 		var entry []byte
 		entry = appendKey(entry, key)
-		entry = appendValue(entry, value)
+		entry = appendValue(entry, m[key])
 		b = AppendTag(b, num, BytesType)
 		b = AppendBytes(b, entry)
 	}
 	return b
+}
+
+func lessMapKey[K comparable](a, b K) bool {
+	switch x := any(a).(type) {
+	case string:
+		return x < any(b).(string)
+	case bool:
+		return !x && any(b).(bool)
+	case int32:
+		return x < any(b).(int32)
+	case int64:
+		return x < any(b).(int64)
+	case uint32:
+		return x < any(b).(uint32)
+	case uint64:
+		return x < any(b).(uint64)
+	default:
+		return false
+	}
 }

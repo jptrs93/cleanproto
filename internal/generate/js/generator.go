@@ -572,6 +572,8 @@ type jsFileData struct {
 	NeedsDuration        bool
 	NeedsTimestampNative bool
 	NeedsDurationBigInt  bool
+	NeedsMapSortString   bool
+	NeedsMapSortInt      bool
 }
 
 type jsMessage struct {
@@ -615,6 +617,14 @@ func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, 
 			}
 			if field.JSType == "bigint" && field.IsDuration {
 				data.NeedsDurationBigInt = true
+			}
+			if field.IsMap {
+				switch field.MapKeyKind {
+				case ir.KindString, ir.KindBool:
+					data.NeedsMapSortString = true
+				default:
+					data.NeedsMapSortInt = true
+				}
 			}
 		}
 		data.Messages = append(data.Messages, jsMsg)
@@ -690,6 +700,8 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 			b.WriteString(").length > 0) {\n")
 			b.WriteString("        for (const [rawKey, value] of Object.entries(message.")
 			b.WriteString(field.Name)
+			b.WriteString(").sort(")
+			b.WriteString(mapEntryComparator(field.MapKeyKind))
 			b.WriteString(")) {\n")
 			b.WriteString("            const key = ")
 			b.WriteString(jsMapKeyCast(field.MapKeyKind))
@@ -1394,6 +1406,15 @@ func jsIsPackable(kind ir.Kind) bool {
 		return false
 	default:
 		return true
+	}
+}
+
+func mapEntryComparator(kind ir.Kind) string {
+	switch kind {
+	case ir.KindString, ir.KindBool:
+		return "compareMapEntriesString"
+	default:
+		return "compareMapEntriesInt"
 	}
 }
 
