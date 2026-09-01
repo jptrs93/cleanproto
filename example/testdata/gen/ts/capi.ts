@@ -17,6 +17,7 @@ import type {
 type HeaderProvider = () => Record<string, string>;
 type ErrorHandler = (response: Response) => Promise<never>;
 type RequestBody = BodyInit;
+type FetchDefaults = Omit<RequestInit, 'method' | 'headers' | 'body' | 'signal'>;
 
 async function* readLengthPrefixedFrames<T>(body: ReadableStream<Uint8Array>, decode: (buf: ArrayBuffer) => T): AsyncIterable<T> {
   const reader = body.getReader();
@@ -95,10 +96,13 @@ export class Capi {
 
   errorHandler: ErrorHandler;
 
-  constructor(baseURL = '', headerProvider: HeaderProvider | null = null, errorHandler: ErrorHandler | null = null) {
+  fetchDefaults: FetchDefaults;
+
+  constructor(baseURL = '', headerProvider: HeaderProvider | null = null, errorHandler: ErrorHandler | null = null, fetchDefaults: FetchDefaults = {}) {
     this.baseURL = baseURL;
     this.headerProvider = headerProvider == null ? () => ({}) : headerProvider;
     this.errorHandler = errorHandler == null ? async (response: Response) => { throw new Error(`HTTP ${response.status}`); } : errorHandler;
+    this.fetchDefaults = fetchDefaults;
   }
 
   async #request(path: string, { method = 'GET', body, signal, contentType, duplex }: { method?: string; body?: RequestBody; signal?: AbortSignal; contentType?: string; duplex?: 'half' } = {}): Promise<Response> {
@@ -107,29 +111,29 @@ export class Capi {
     if (body !== undefined) {
       headers['Content-Type'] = contentType || 'application/x-protobuf';
     }
-    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal };
+    const init: RequestInit & { duplex?: 'half' } = { ...this.fetchDefaults, method, headers, body, signal };
     if (duplex) { init.duplex = duplex; }
     return fetch(`${this.baseURL}${path}`, init);
   }
 
-  async getLibraryV1(): Promise<Library> {
-    const response = await this.#request('/library/v1', { method: 'GET' });
+  async getLibraryV1(options: { signal?: AbortSignal } = {}): Promise<Library> {
+    const response = await this.#request('/library/v1', { method: 'GET', signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }
     return decodeLibrary(await response.arrayBuffer());
   }
 
-  async getLibraryBookV1(payload: GetBookReq): Promise<Book> {
-    const response = await this.#request('/library/book/v1', { method: 'GET', body: encodeGetBookReq(payload) as BodyInit });
+  async getLibraryBookV1(payload: GetBookReq, options: { signal?: AbortSignal } = {}): Promise<Book> {
+    const response = await this.#request('/library/book/v1', { method: 'GET', body: encodeGetBookReq(payload) as BodyInit, signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }
     return decodeBook(await response.arrayBuffer());
   }
 
-  async postLibraryBook_CheckoutV1(payload: CheckoutBookReq): Promise<void> {
-    const response = await this.#request('/library/book-checkout-v1', { method: 'POST', body: encodeCheckoutBookReq(payload) as BodyInit });
+  async postLibraryBook_CheckoutV1(payload: CheckoutBookReq, options: { signal?: AbortSignal } = {}): Promise<void> {
+    const response = await this.#request('/library/book-checkout-v1', { method: 'POST', body: encodeCheckoutBookReq(payload) as BodyInit, signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }
@@ -158,8 +162,8 @@ export class Capi {
     };
   }
 
-  async getLibraryEventsV1(): Promise<void> {
-    const response = await this.#request('/library/events/v1', { method: 'GET' });
+  async getLibraryEventsV1(options: { signal?: AbortSignal } = {}): Promise<void> {
+    const response = await this.#request('/library/events/v1', { method: 'GET', signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }

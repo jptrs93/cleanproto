@@ -185,7 +185,8 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	}
 	b.WriteString("type HeaderProvider = () => Record<string, string>;\n")
 	b.WriteString("type ErrorHandler = (response: Response) => Promise<never>;\n")
-	b.WriteString("type RequestBody = BodyInit;\n\n")
+	b.WriteString("type RequestBody = BodyInit;\n")
+	b.WriteString("type FetchDefaults = Omit<RequestInit, 'method' | 'headers' | 'body' | 'signal'>;\n\n")
 	if hasServerStream {
 		b.WriteString("async function* readLengthPrefixedFrames<T>(body: ReadableStream<Uint8Array>, decode: (buf: ArrayBuffer) => T): AsyncIterable<T> {\n")
 		b.WriteString("  const reader = body.getReader();\n")
@@ -263,10 +264,12 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	b.WriteString("  baseURL: string;\n")
 	b.WriteString("  headerProvider: HeaderProvider;\n\n")
 	b.WriteString("  errorHandler: ErrorHandler;\n\n")
-	b.WriteString("  constructor(baseURL = '', headerProvider: HeaderProvider | null = null, errorHandler: ErrorHandler | null = null) {\n")
+	b.WriteString("  fetchDefaults: FetchDefaults;\n\n")
+	b.WriteString("  constructor(baseURL = '', headerProvider: HeaderProvider | null = null, errorHandler: ErrorHandler | null = null, fetchDefaults: FetchDefaults = {}) {\n")
 	b.WriteString("    this.baseURL = baseURL;\n")
 	b.WriteString("    this.headerProvider = headerProvider == null ? () => ({}) : headerProvider;\n")
 	b.WriteString("    this.errorHandler = errorHandler == null ? async (response: Response) => { throw new Error(`HTTP ${response.status}`); } : errorHandler;\n")
+	b.WriteString("    this.fetchDefaults = fetchDefaults;\n")
 	b.WriteString("  }\n\n")
 	b.WriteString("  async #request(path: string, { method = 'GET', body, signal, contentType, duplex }: { method?: string; body?: RequestBody; signal?: AbortSignal; contentType?: string; duplex?: 'half' } = {}): Promise<Response> {\n")
 	b.WriteString("    const headers = this.headerProvider() || {};\n")
@@ -274,7 +277,7 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	b.WriteString("    if (body !== undefined) {\n")
 	b.WriteString("      headers['Content-Type'] = contentType || 'application/x-protobuf';\n")
 	b.WriteString("    }\n")
-	b.WriteString("    const init: RequestInit & { duplex?: 'half' } = { method, headers, body, signal };\n")
+	b.WriteString("    const init: RequestInit & { duplex?: 'half' } = { ...this.fetchDefaults, method, headers, body, signal };\n")
 	b.WriteString("    if (duplex) { init.duplex = duplex; }\n")
 	b.WriteString("    return fetch(`${this.baseURL}${path}`, init);\n")
 	b.WriteString("  }\n\n")
@@ -345,9 +348,9 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 		b.WriteString(m.Name)
 		if m.InputType == "Empty" {
 			if m.OutputType == "Empty" {
-				b.WriteString("(): Promise<void> {\n")
+				b.WriteString("(options: { signal?: AbortSignal } = {}): Promise<void> {\n")
 			} else {
-				b.WriteString("(): Promise<")
+				b.WriteString("(options: { signal?: AbortSignal } = {}): Promise<")
 				b.WriteString(m.OutputType)
 				b.WriteString("> {\n")
 			}
@@ -355,16 +358,16 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString(m.PathLiteral)
 			b.WriteString(", { method: '")
 			b.WriteString(m.HTTPMethod)
-			b.WriteString("' });\n")
+			b.WriteString("', signal: options.signal });\n")
 		} else {
 			if m.OutputType == "Empty" {
 				b.WriteString("(payload: ")
 				b.WriteString(m.InputType)
-				b.WriteString("): Promise<void> {\n")
+				b.WriteString(", options: { signal?: AbortSignal } = {}): Promise<void> {\n")
 			} else {
 				b.WriteString("(payload: ")
 				b.WriteString(m.InputType)
-				b.WriteString("): Promise<")
+				b.WriteString(", options: { signal?: AbortSignal } = {}): Promise<")
 				b.WriteString(m.OutputType)
 				b.WriteString("> {\n")
 			}
@@ -374,7 +377,7 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			b.WriteString(m.HTTPMethod)
 			b.WriteString("', body: encode")
 			b.WriteString(m.InputType)
-			b.WriteString("(payload) as BodyInit });\n")
+			b.WriteString("(payload) as BodyInit, signal: options.signal });\n")
 		}
 		b.WriteString("    if (!response.ok) {\n")
 		b.WriteString("      return this.errorHandler(response);\n")

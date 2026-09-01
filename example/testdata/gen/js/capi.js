@@ -11,6 +11,7 @@ import {
 /** @typedef {() => Object.<string, string>} HeaderProvider */
 /** @typedef {(response: Response) => Promise<never>} ErrorHandler */
 /** @typedef {BodyInit|Uint8Array} RequestBody */
+/** @typedef {Omit<RequestInit, 'method' | 'headers' | 'body' | 'signal'>} FetchDefaults */
 
 async function* readLengthPrefixedFrames(body, decode) {
   const reader = body.getReader();
@@ -88,11 +89,13 @@ export class Capi {
    * @param {string} [baseURL='']
    * @param {HeaderProvider | null} [headerProvider=null]
    * @param {ErrorHandler | null} [errorHandler=null]
+   * @param {FetchDefaults} [fetchDefaults={}]
    */
-  constructor(baseURL = '', headerProvider = null, errorHandler = null) {
+  constructor(baseURL = '', headerProvider = null, errorHandler = null, fetchDefaults = {}) {
     this.baseURL = baseURL;
     this.headerProvider = headerProvider == null ? () => ({}) : headerProvider;
     this.errorHandler = errorHandler == null ? async (response) => { throw new Error(`HTTP ${response.status}`); } : errorHandler;
+    this.fetchDefaults = fetchDefaults;
   }
 
   /**
@@ -106,16 +109,17 @@ export class Capi {
     if (body !== undefined) {
       headers['Content-Type'] = contentType || 'application/x-protobuf';
     }
-    const init = { method, headers, body, signal };
+    const init = { ...this.fetchDefaults, method, headers, body, signal };
     if (duplex) { init.duplex = duplex; }
     return fetch(`${this.baseURL}${path}`, init);
   }
 
   /**
+   * @param {{ signal?: AbortSignal }} [options={}]
    * @returns {Promise<Library>}
    */
-  async getLibraryV1() {
-    const response = await this.#request('/v1/library', { method: 'GET' });
+  async getLibraryV1(options = {}) {
+    const response = await this.#request('/v1/library', { method: 'GET', signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }
@@ -124,10 +128,11 @@ export class Capi {
 
   /**
    * @param {GetBookReq} payload
+   * @param {{ signal?: AbortSignal }} [options={}]
    * @returns {Promise<Book>}
    */
-  async getLibraryBookV1(payload) {
-    const response = await this.#request('/v1/library/book', { method: 'GET', body: encodeGetBookReq(payload) });
+  async getLibraryBookV1(payload, options = {}) {
+    const response = await this.#request('/v1/library/book', { method: 'GET', body: encodeGetBookReq(payload), signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }
@@ -136,10 +141,11 @@ export class Capi {
 
   /**
    * @param {CheckoutBookReq} payload
+   * @param {{ signal?: AbortSignal }} [options={}]
    * @returns {Promise<void>}
    */
-  async postLibraryBookCheckoutV1(payload) {
-    const response = await this.#request('/v1/library/book-checkout', { method: 'POST', body: encodeCheckoutBookReq(payload) });
+  async postLibraryBookCheckoutV1(payload, options = {}) {
+    const response = await this.#request('/v1/library/book-checkout', { method: 'POST', body: encodeCheckoutBookReq(payload), signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }
@@ -178,10 +184,11 @@ export class Capi {
   }
 
   /**
+   * @param {{ signal?: AbortSignal }} [options={}]
    * @returns {Promise<void>}
    */
-  async getLibraryEventsV1() {
-    const response = await this.#request('/v1/library/events', { method: 'GET' });
+  async getLibraryEventsV1(options = {}) {
+    const response = await this.#request('/v1/library/events', { method: 'GET', signal: options.signal });
     if (!response.ok) {
       return this.errorHandler(response);
     }
