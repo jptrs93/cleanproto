@@ -2340,14 +2340,14 @@ func goEncodeOptionalField(name string, field ir.Field) ([]string, error) {
 	if field.Kind == ir.KindEnum {
 		return []string{
 			fmt.Sprintf("if %s != nil {", name),
-			fmt.Sprintf("b = AppendInt32Field(b, int32(*%s), %d)", name, field.Number),
+			fmt.Sprintf("b = AppendInt32Elem(b, int32(*%s), %d)", name, field.Number),
 			"}",
 		}, nil
 	}
 	if field.Kind == ir.KindBytes {
 		return []string{
 			fmt.Sprintf("if %s != nil {", name),
-			fmt.Sprintf("b = AppendBytesField(b, *%s, %d)", name, field.Number),
+			fmt.Sprintf("b = AppendBytesElem(b, *%s, %d)", name, field.Number),
 			"}",
 		}, nil
 	}
@@ -2391,7 +2391,7 @@ func goEncodeNative(fieldName string, field ir.Field) ([]string, error) {
 	}
 	if field.IsOptional {
 		lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
-		lines = append(lines, fmt.Sprintf("b = %s(b, *%s, %d)", appendFunc, fieldName, field.Number))
+		lines = append(lines, fmt.Sprintf("b = %sElem(b, *%s, %d)", appendFunc, fieldName, field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -2443,8 +2443,12 @@ func goEncodeCustomType(fieldName string, field ir.Field) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		elemFunc, err := goAppendElemHelperName(field.Kind)
+		if err != nil {
+			return nil, err
+		}
 		lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
-		lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", appendFunc, rawExpr, field.Number))
+		lines = append(lines, fmt.Sprintf("b = %s(b, %s, %d)", elemFunc, rawExpr, field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -2740,8 +2744,8 @@ func goEncodeTimestamp(fieldName string, field ir.Field) ([]string, error) {
 	}
 
 	if field.IsOptional {
-		lines = append(lines, fmt.Sprintf("if %s != nil && !%s.IsZero() {", fieldName, fieldName))
-		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeTimestamp(*%s), %d)", fieldName, field.Number))
+		lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
+		lines = append(lines, fmt.Sprintf("b = AppendBytesElem(b, EncodeTimestamp(*%s), %d)", fieldName, field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -2763,8 +2767,8 @@ func goEncodeDuration(fieldName string, field ir.Field) ([]string, error) {
 	}
 
 	if field.IsOptional {
-		lines = append(lines, fmt.Sprintf("if %s != nil && *%s != 0 {", fieldName, fieldName))
-		lines = append(lines, fmt.Sprintf("b = AppendBytesField(b, EncodeDuration(*%s), %d)", fieldName, field.Number))
+		lines = append(lines, fmt.Sprintf("if %s != nil {", fieldName))
+		lines = append(lines, fmt.Sprintf("b = AppendBytesElem(b, EncodeDuration(*%s), %d)", fieldName, field.Number))
 		lines = append(lines, "}")
 		return lines, nil
 	}
@@ -5028,7 +5032,7 @@ func AppendVarIntField(b []byte, v uint64, num protowire.Number) []byte {
 }
 
 func AppendVarIntFieldOpt(b []byte, v *uint64, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.VarintType)
@@ -5044,7 +5048,7 @@ func AppendStringField(b []byte, v string, num protowire.Number) []byte {
 }
 
 func AppendStringFieldOpt(b []byte, v *string, num protowire.Number) []byte {
-	if v == nil || *v == "" {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.BytesType)
@@ -5068,11 +5072,10 @@ func AppendBoolField(b []byte, v bool, num protowire.Number) []byte {
 }
 
 func AppendBoolFieldOpt(b []byte, v *bool, num protowire.Number) []byte {
-	if v == nil || !*v {
+	if v == nil {
 		return b
 	}
-	b = protowire.AppendTag(b, num, protowire.VarintType)
-	return protowire.AppendVarint(b, 1)
+	return AppendBoolElem(b, *v, num)
 }
 
 func AppendFloat32Field(b []byte, v float32, num protowire.Number) []byte {
@@ -5084,7 +5087,7 @@ func AppendFloat32Field(b []byte, v float32, num protowire.Number) []byte {
 }
 
 func AppendFloat32FieldOpt(b []byte, v *float32, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
@@ -5100,7 +5103,7 @@ func AppendFloat64Field(b []byte, v float64, num protowire.Number) []byte {
 }
 
 func AppendFloat64FieldOpt(b []byte, v *float64, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
@@ -5116,7 +5119,7 @@ func AppendInt32Field(b []byte, v int32, num protowire.Number) []byte {
 }
 
 func AppendInt32FieldOpt(b []byte, v *int32, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.VarintType)
@@ -5132,7 +5135,7 @@ func AppendUint32Field(b []byte, v uint32, num protowire.Number) []byte {
 }
 
 func AppendUint32FieldOpt(b []byte, v *uint32, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.VarintType)
@@ -5148,7 +5151,7 @@ func AppendSint32Field(b []byte, v int32, num protowire.Number) []byte {
 }
 
 func AppendSint32FieldOpt(b []byte, v *int32, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.VarintType)
@@ -5164,7 +5167,7 @@ func AppendInt64Field(b []byte, v int64, num protowire.Number) []byte {
 }
 
 func AppendInt64FieldOpt(b []byte, v *int64, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.VarintType)
@@ -5180,7 +5183,7 @@ func AppendUint64Field(b []byte, v uint64, num protowire.Number) []byte {
 }
 
 func AppendUint64FieldOpt(b []byte, v *uint64, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.VarintType)
@@ -5196,7 +5199,7 @@ func AppendSint64Field(b []byte, v int64, num protowire.Number) []byte {
 }
 
 func AppendSint64FieldOpt(b []byte, v *int64, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.VarintType)
@@ -5212,7 +5215,7 @@ func AppendFixed32Field(b []byte, v uint32, num protowire.Number) []byte {
 }
 
 func AppendFixed32FieldOpt(b []byte, v *uint32, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
@@ -5228,7 +5231,7 @@ func AppendFixed64Field(b []byte, v uint64, num protowire.Number) []byte {
 }
 
 func AppendFixed64FieldOpt(b []byte, v *uint64, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.Fixed64Type)
@@ -5244,7 +5247,7 @@ func AppendSfixed32Field(b []byte, v int32, num protowire.Number) []byte {
 }
 
 func AppendSfixed32FieldOpt(b []byte, v *int32, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.Fixed32Type)
@@ -5260,7 +5263,7 @@ func AppendSfixed64Field(b []byte, v int64, num protowire.Number) []byte {
 }
 
 func AppendSfixed64FieldOpt(b []byte, v *int64, num protowire.Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = protowire.AppendTag(b, num, protowire.Fixed64Type)

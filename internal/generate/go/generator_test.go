@@ -293,7 +293,7 @@ func TestBuildGoFileDataPackageLocalCustomGoType(t *testing.T) {
 	encodeChecks := []string{
 		"b = AppendInt32Field(b, int32(m.Status), 1)",
 		"if m.StatusOpt != nil {",
-		"b = AppendInt32Field(b, int32(*m.StatusOpt), 2)",
+		"b = AppendInt32Elem(b, int32(*m.StatusOpt), 2)",
 		"packed = AppendInt32Compact(packed, int32(item))",
 	}
 	for _, check := range encodeChecks {
@@ -1411,5 +1411,86 @@ func TestLoadUtilSourceSortsMapKeys(t *testing.T) {
 	}
 	if _, err := parser.ParseFile(token.NewFileSet(), "util.gen.go", source, parser.AllErrors); err != nil {
 		t.Fatalf("expected generated util source to parse: %v\n%s", err, source)
+	}
+}
+
+// proto3 optional means explicit presence: the non-nil pointer is the
+// presence bit, so an explicit 0, "" or false must reach the decoder as a set
+// field, exactly as the TS writer already encodes optional fields. The Opt
+// append helpers therefore guard on nil alone and never skip zero values.
+func TestLoadUtilSourceOptHelpersKeepExplicitZero(t *testing.T) {
+	src, err := loadUtilSource("example")
+	if err != nil {
+		t.Fatalf("loadUtilSource: %v", err)
+	}
+	source := string(src)
+	for _, stale := range []string{
+		"if v == nil || *v == 0",
+		"if v == nil || *v == \"\"",
+		"if v == nil || !*v",
+	} {
+		if strings.Contains(source, stale) {
+			t.Fatalf("Opt append helper skips explicit zero values: %q", stale)
+		}
+	}
+	if !strings.Contains(source, "func AppendInt64FieldOpt") {
+		t.Fatalf("expected util source to define AppendInt64FieldOpt")
+	}
+}
+
+// Optional enum, bytes, timestamp and duration fields bypass the Opt append
+// helpers, so their encode lines must pair a plain nil guard with the
+// unconditional Elem appenders - no IsZero or != 0 checks that would erase
+// presence for explicitly set zero values.
+func TestBuildGoFileDataOptionalFieldsKeepExplicitZero(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Enums: []ir.Enum{{
+			Name:     "Status",
+			FullName: "example.Status",
+			Values:   []ir.EnumValue{{Name: "STATUS_UNKNOWN", Number: 0}},
+		}},
+		Messages: []ir.Message{{
+			Name:     "Row",
+			FullName: "example.Row",
+			Fields: []ir.Field{
+				{Name: "count", Number: 1, Kind: ir.KindInt64, GoEncode: true, IsOptional: true},
+				{Name: "status", Number: 2, Kind: ir.KindEnum, EnumFullName: "example.Status", GoEncode: true, IsOptional: true},
+				{Name: "blob", Number: 3, Kind: ir.KindBytes, GoEncode: true, IsOptional: true},
+				{Name: "seen_at", Number: 4, Kind: ir.KindMessage, IsTimestamp: true, GoEncode: true, IsOptional: true},
+				{Name: "wait", Number: 5, Kind: ir.KindMessage, IsDuration: true, GoEncode: true, IsOptional: true},
+			},
+		}},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+	enumIndex := map[string]ir.Enum{}
+	for _, enum := range file.Enums {
+		enumIndex[enum.FullName] = enum
+	}
+
+	data, err := buildGoFileData(file, msgIndex, enumIndex, file.GoPackage, "", false, nil, nil)
+	if err != nil {
+		t.Fatalf("buildGoFileData: %v", err)
+	}
+	encode := strings.Join(data.Messages[0].EncodeLines, "\n")
+	encodeChecks := []string{
+		"b = AppendInt64FieldOpt(b, m.Count, 1)",
+		"b = AppendInt32Elem(b, int32(*m.Status), 2)",
+		"b = AppendBytesElem(b, *m.Blob, 3)",
+		"b = AppendBytesElem(b, EncodeTimestamp(*m.SeenAt), 4)",
+		"b = AppendBytesElem(b, EncodeDuration(*m.Wait), 5)",
+	}
+	for _, check := range encodeChecks {
+		if !strings.Contains(encode, check) {
+			t.Fatalf("expected optional encode to contain %q, got:\n%s", check, encode)
+		}
+	}
+	for _, stale := range []string{".IsZero()", "!= 0 {"} {
+		if strings.Contains(encode, stale) {
+			t.Fatalf("optional encode must guard on nil alone, found %q in:\n%s", stale, encode)
+		}
 	}
 }

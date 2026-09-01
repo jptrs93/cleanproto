@@ -1233,7 +1233,7 @@ func AppendVarIntField(b []byte, v uint64, num Number) []byte {
 }
 
 func AppendVarIntFieldOpt(b []byte, v *uint64, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, VarintType)
@@ -1249,7 +1249,7 @@ func AppendStringField(b []byte, v string, num Number) []byte {
 }
 
 func AppendStringFieldOpt(b []byte, v *string, num Number) []byte {
-	if v == nil || *v == "" {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, BytesType)
@@ -1273,11 +1273,10 @@ func AppendBoolField(b []byte, v bool, num Number) []byte {
 }
 
 func AppendBoolFieldOpt(b []byte, v *bool, num Number) []byte {
-	if v == nil || !*v {
+	if v == nil {
 		return b
 	}
-	b = AppendTag(b, num, VarintType)
-	return AppendVarint(b, 1)
+	return AppendBoolElem(b, *v, num)
 }
 
 func AppendFloat32Field(b []byte, v float32, num Number) []byte {
@@ -1289,7 +1288,7 @@ func AppendFloat32Field(b []byte, v float32, num Number) []byte {
 }
 
 func AppendFloat32FieldOpt(b []byte, v *float32, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, Fixed32Type)
@@ -1305,7 +1304,7 @@ func AppendFloat64Field(b []byte, v float64, num Number) []byte {
 }
 
 func AppendFloat64FieldOpt(b []byte, v *float64, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, Fixed64Type)
@@ -1321,7 +1320,7 @@ func AppendInt32Field(b []byte, v int32, num Number) []byte {
 }
 
 func AppendInt32FieldOpt(b []byte, v *int32, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, VarintType)
@@ -1337,7 +1336,7 @@ func AppendUint32Field(b []byte, v uint32, num Number) []byte {
 }
 
 func AppendUint32FieldOpt(b []byte, v *uint32, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, VarintType)
@@ -1353,7 +1352,7 @@ func AppendSint32Field(b []byte, v int32, num Number) []byte {
 }
 
 func AppendSint32FieldOpt(b []byte, v *int32, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, VarintType)
@@ -1369,7 +1368,7 @@ func AppendInt64Field(b []byte, v int64, num Number) []byte {
 }
 
 func AppendInt64FieldOpt(b []byte, v *int64, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, VarintType)
@@ -1385,7 +1384,7 @@ func AppendUint64Field(b []byte, v uint64, num Number) []byte {
 }
 
 func AppendUint64FieldOpt(b []byte, v *uint64, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, VarintType)
@@ -1401,7 +1400,7 @@ func AppendSint64Field(b []byte, v int64, num Number) []byte {
 }
 
 func AppendSint64FieldOpt(b []byte, v *int64, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, VarintType)
@@ -1417,7 +1416,7 @@ func AppendFixed32Field(b []byte, v uint32, num Number) []byte {
 }
 
 func AppendFixed32FieldOpt(b []byte, v *uint32, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, Fixed32Type)
@@ -1433,7 +1432,7 @@ func AppendFixed64Field(b []byte, v uint64, num Number) []byte {
 }
 
 func AppendFixed64FieldOpt(b []byte, v *uint64, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, Fixed64Type)
@@ -1449,7 +1448,7 @@ func AppendSfixed32Field(b []byte, v int32, num Number) []byte {
 }
 
 func AppendSfixed32FieldOpt(b []byte, v *int32, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, Fixed32Type)
@@ -1465,7 +1464,7 @@ func AppendSfixed64Field(b []byte, v int64, num Number) []byte {
 }
 
 func AppendSfixed64FieldOpt(b []byte, v *int64, num Number) []byte {
-	if v == nil || *v == 0 {
+	if v == nil {
 		return b
 	}
 	b = AppendTag(b, num, Fixed64Type)
