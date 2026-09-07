@@ -78,4 +78,10 @@ service LibraryService {
     option (cp.multipart_response) = true;
     option (cp.compression) = COMPRESSION_MODE_NEVER;
   }
+  rpc Assets(cp.Empty) returns (cp.Empty) {
+    option (cp.go_custom) = true;
+    option (cp.url) = "/assets/{path...}";
+    option (cp.http_method) = HTTP_METHOD_ANY;
+    option (cp.compression) = COMPRESSION_MODE_NEVER;
+  }
 }

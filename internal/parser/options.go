@@ -39,6 +39,7 @@ var E_Audit = cp.E_Audit
 var E_Compression = cp.E_Compression
 var E_Url = cp.E_Url
 var E_MultipartResponse = cp.E_MultipartResponse
+var E_HttpMethod = cp.E_HttpMethod
 
 func goTypeFromFieldOptions(field protoreflect.FieldDescriptor) (string, error) {
 	opts, ok := field.Options().(*descriptorpb.FieldOptions)
@@ -272,6 +273,18 @@ func auditFromMethodOptions(method protoreflect.MethodDescriptor) (ir.AuditMode,
 		return 0, fmt.Errorf("unknown cp.AuditMode value %d on %s", raw, method.FullName())
 	}
 	return mode, nil
+}
+
+func httpMethodFromMethodOptions(method protoreflect.MethodDescriptor) (ir.HTTPMethod, error) {
+	raw, err := enumFromMethodOptions(method, 50036)
+	if err != nil {
+		return 0, err
+	}
+	m := ir.HTTPMethod(raw)
+	if m < ir.HTTPMethodUnspecified || m > ir.HTTPMethodDelete {
+		return 0, fmt.Errorf("unknown cp.HttpMethod value %d on %s", raw, method.FullName())
+	}
+	return m, nil
 }
 
 func multipartResponseFromMethodOptions(method protoreflect.MethodDescriptor) (bool, error) {

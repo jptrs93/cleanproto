@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jptrs93/cleanproto/internal/ir"
 )
 
 func parseTestProto(t *testing.T, protoSource string) error {
@@ -303,5 +305,128 @@ service DemoService {
 	}
 	if !methods[1].MultipartResponse {
 		t.Fatalf("expected GetPartsV1 to be multipart")
+	}
+}
+
+func TestParseHttpMethodFromMethodOptions(t *testing.T) {
+	const protoSource = `syntax = "proto3";
+
+package demo;
+
+import "options.proto";
+
+option go_package = "demo";
+
+service DemoService {
+	 rpc Static(cp.Empty) returns (cp.Empty) {
+	   option (cp.go_custom) = true;
+	   option (cp.url) = "/";
+	   option (cp.http_method) = HTTP_METHOD_ANY;
+	 }
+	 rpc Rill(cp.Empty) returns (cp.Empty) {
+	   option (cp.go_custom) = true;
+	   option (cp.url) = "/rill/{path...}";
+	   option (cp.http_method) = HTTP_METHOD_ANY;
+	 }
+	 rpc Books(cp.Empty) returns (cp.Empty) {
+	   option (cp.http_method) = HTTP_METHOD_DELETE;
+	 }
+}
+`
+
+	dir := t.TempDir()
+	protoPath := filepath.Join(dir, "demo.proto")
+	if err := os.WriteFile(protoPath, []byte(protoSource), 0o644); err != nil {
+		t.Fatalf("write proto: %v", err)
+	}
+	optionsPath := filepath.Join(dir, "options.proto")
+	if err := os.WriteFile(optionsPath, []byte(optionsProtoSource), 0o644); err != nil {
+		t.Fatalf("write options proto: %v", err)
+	}
+
+	p := Parser{ImportPaths: []string{dir}}
+	files, err := p.Parse(context.Background(), []string{"demo.proto"})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	methods := files[0].Services[0].Methods
+	if methods[1].HTTPMethod != ir.HTTPMethodAny {
+		t.Fatalf("expected HTTP_METHOD_ANY, got %v", methods[1].HTTPMethod)
+	}
+	route, err := methods[1].Route()
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if route.Pattern() != "/rill/{path...}" || !route.Wildcard {
+		t.Fatalf("unexpected route %+v", route)
+	}
+	route, err = methods[2].Route()
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if route.Pattern() != "DELETE /books" {
+		t.Fatalf("unexpected route %+v", route)
+	}
+}
+
+func TestParseRejectsRouteMisuse(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "verbless name",
+			body: `rpc Rill(cp.Empty) returns (cp.Empty);`,
+			want: "cp.http_method",
+		},
+		{
+			name: "wildcard without custom",
+			body: `rpc GetThingV1(cp.Empty) returns (cp.Empty) { option (cp.url) = "/v1/thing/{id}"; }`,
+			want: "requires cp.go_custom",
+		},
+		{
+			name: "any with body",
+			body: `rpc Rill(Req) returns (cp.Empty) { option (cp.go_custom) = true; option (cp.url) = "/rill/{path...}"; option (cp.http_method) = HTTP_METHOD_ANY; }`,
+			want: "requires cp.Empty input",
+		},
+		{
+			name: "conflicting patterns",
+			body: `rpc Get(cp.Empty) returns (cp.Empty) { option (cp.go_custom) = true; }
+	 rpc Rill(cp.Empty) returns (cp.Empty) { option (cp.go_custom) = true; option (cp.url) = "/rill/{path...}"; option (cp.http_method) = HTTP_METHOD_ANY; }`,
+			want: "conflicts with pattern \"GET /\"",
+		},
+		{
+			name: "invalid pattern",
+			body: `rpc GetThingV1(cp.Empty) returns (cp.Empty) { option (cp.go_custom) = true; option (cp.url) = "/v1/thing/{"; }`,
+			want: "rpc GetThingV1",
+		},
+		{
+			name: "bad enum value",
+			body: `rpc GetThingV1(cp.Empty) returns (cp.Empty) { option (cp.http_method) = 9; }`,
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		protoSource := `syntax = "proto3";
+
+package demo;
+
+import "options.proto";
+
+option go_package = "demo";
+
+message Req {
+  string id = 1;
+}
+
+service DemoService {
+	 ` + tc.body + `
+}
+`
+		err := parseTestProto(t, protoSource)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: error = %v, want containing %q", tc.name, err, tc.want)
+		}
 	}
 }

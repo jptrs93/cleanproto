@@ -225,6 +225,10 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 			if err != nil {
 				return nil, err
 			}
+			httpMethod, err := httpMethodFromMethodOptions(m)
+			if err != nil {
+				return nil, err
+			}
 			methods = append(methods, ir.Method{
 				Name:              string(m.Name()),
 				InputFullName:     string(m.Input().FullName()),
@@ -239,9 +243,13 @@ func collectServices(services protoreflect.ServiceDescriptors) ([]ir.Service, er
 				PolicyScopes:      policyScopes,
 				CompressionMode:   compressionMode,
 				MultipartResponse: multipartResponse,
+				HTTPMethod:        httpMethod,
 			})
 		}
 		outSvc.Methods = methods
+		if err := ir.ValidateRoutes(outSvc); err != nil {
+			return nil, fmt.Errorf("service %s: %w", svc.Name(), err)
+		}
 		result = append(result, outSvc)
 	}
 	return result, nil

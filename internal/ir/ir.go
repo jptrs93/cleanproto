@@ -21,6 +21,7 @@ type Method struct {
 	GoCustom          bool
 	OperationID       string
 	URL               string
+	HTTPMethod        HTTPMethod
 	Audit             AuditMode
 	IsStreamingClient bool
 	IsStreamingServer bool

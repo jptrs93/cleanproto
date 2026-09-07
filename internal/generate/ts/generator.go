@@ -96,13 +96,14 @@ func buildTSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 			if m.MultipartResponse {
 				continue
 			}
-			httpMethod, path, ok := deriveHTTP(m.Name)
-			if !ok {
+			route, err := m.Route()
+			if err != nil {
+				return "", err
+			}
+			if route.Wildcard {
 				continue
 			}
-			if m.URL != "" {
-				path = m.URL
-			}
+			httpMethod, path := route.Method, route.Path
 			inType, ok := messageNameByFullName(msgIndex, m.InputFullName)
 			if !ok {
 				return "", fmt.Errorf("unknown method input type: %s", m.InputFullName)
@@ -414,66 +415,6 @@ func lowerFirst(s string) string {
 	r := []rune(s)
 	r[0] = unicode.ToLower(r[0])
 	return string(r)
-}
-
-func deriveHTTP(name string) (method string, path string, ok bool) {
-	prefixes := []string{"Get", "Post", "Put", "Patch", "Delete"}
-	method = ""
-	rest := ""
-	for _, p := range prefixes {
-		if strings.HasPrefix(name, p) {
-			method = strings.ToUpper(p)
-			rest = strings.TrimPrefix(name, p)
-			break
-		}
-	}
-	if method == "" || rest == "" {
-		return "", "", false
-	}
-	underscoreParts := strings.Split(rest, "_")
-	if len(underscoreParts) == 0 {
-		return "", "", false
-	}
-	first := camelWords(underscoreParts[0])
-	if len(first) == 0 {
-		return "", "", false
-	}
-	base := "/" + strings.Join(first, "/")
-	if len(underscoreParts) == 1 {
-		return method, base, true
-	}
-	for _, seg := range underscoreParts[1:] {
-		words := camelWords(seg)
-		if len(words) == 0 {
-			continue
-		}
-		base += "-" + strings.Join(words, "-")
-	}
-	return method, base, true
-}
-
-func camelWords(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var out []string
-	var b strings.Builder
-	runes := []rune(s)
-	for i, r := range runes {
-		if i > 0 {
-			prev := runes[i-1]
-			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
-			if unicode.IsUpper(r) && (unicode.IsLower(prev) || (unicode.IsUpper(prev) && nextLower) || unicode.IsDigit(prev)) {
-				out = append(out, strings.ToLower(b.String()))
-				b.Reset()
-			}
-		}
-		b.WriteRune(r)
-	}
-	if b.Len() > 0 {
-		out = append(out, strings.ToLower(b.String()))
-	}
-	return out
 }
 
 type tsFileData struct {

@@ -12,7 +12,7 @@ Currently supports Go, JavaScript, and TypeScript.
 
 ## Install
 ```
- go install github.com/jptrs93/cleanproto/cmd/cleanproto@v1.2.11
+ go install github.com/jptrs93/cleanproto/cmd/cleanproto@v1.25.0
 ```
 
 ## Usage
@@ -418,6 +418,7 @@ service LibraryService {
 - A trailing `V1` becomes the `/v1` URL prefix.
 - The first CamelCase segment after the verb becomes slash-separated path parts, so `GetLibraryBookV1` maps to `/v1/library/book`.
 - Additional `_`-separated suffix segments become kebab-case suffixes, so `PostLibraryBook_CheckoutV1` maps to `/v1/library/book-checkout`.
+- `cp.url` replaces the derived path, and `cp.http_method` replaces the derived verb (or, with `HTTP_METHOD_ANY`, drops it). See [Custom routes and wildcards](#custom-routes-and-wildcards).
 
 Generate:
 
@@ -600,12 +601,47 @@ func main() {
 ```
 
 - `cp.Empty` from `options.proto` is the special empty message type; when used as a request or response it becomes no request body or no response body in the generated server/client surface.
-- `cp.go_custom = true` switches a Go handler into custom mode so the generated interface method receives `*http.Request` and `http.ResponseWriter` directly, while still optionally decoding the protobuf request first.
+- `cp.go_custom = true` switches a Go handler into custom mode so the generated interface method receives `*http.Request` and `http.ResponseWriter` directly, while still optionally decoding the protobuf request first. It is required for wildcard and `HTTP_METHOD_ANY` routes, see [Custom routes and wildcards](#custom-routes-and-wildcards).
 - `VerifyAuthFunc` now receives `http.ResponseWriter` in addition to the request and policy, so auth code can attach it to a custom auth context or perform lower-level HTTP integration when needed.
 - `MuxConfig.PostAuthMiddlewares` runs after `VerifyAuthFunc` succeeds and receives the authenticated context type, making it a good place for user-scoped rate limits and other auth-aware transport hooks.
 - Generated Go muxes can gzip responses through `MuxConfig.Compression`. `CompressionOptions.MinSize` defaults to disabled when omitted, and `CompressionOptions.Level` defaults to `gzip.DefaultCompression`.
 - `cp.compression` on an RPC overrides the global decision: `COMPRESSION_MODE_ALWAYS` forces gzip when the client accepts it, `COMPRESSION_MODE_NEVER` disables it, and the default `COMPRESSION_MODE_AUTO` uses the global `MinSize` threshold for unary RPCs.
 - Server-streaming RPCs only gzip when `cp.compression = COMPRESSION_MODE_ALWAYS`. Streaming `COMPRESSION_MODE_AUTO` behaves like disabled compression, `CompressionOptions.MinSize` is ignored once a compressed stream starts, and aborted compressed streams terminate without a final gzip trailer so clients can still detect a broken stream.
+
+### Custom routes and wildcards
+
+Every RPC becomes one `http.ServeMux` registration, `"<VERB> <path>"`, so a route is whatever ServeMux accepts. Two method options adjust the derived route:
+
+- `cp.url` sets the path. It must start with `/` and may use ServeMux pattern syntax: `/v1/thing/{id}` (one segment), `/rill/{path...}` (the rest of the path), `/rill/` (subtree), `/v1/thing/{$}` (exact).
+- `cp.http_method` sets the verb (`HTTP_METHOD_GET` … `HTTP_METHOD_DELETE`) or, with `HTTP_METHOD_ANY`, registers the path without one so every method reaches the handler. When it is set the RPC name need not start with a verb; the path then derives from the whole name unless `cp.url` is given.
+
+```proto
+service LibraryService {
+  rpc Static(cp.Empty) returns (cp.Empty) {
+    option (cp.go_custom) = true;
+    option (cp.url) = "/";
+    option (cp.http_method) = HTTP_METHOD_ANY;
+  }
+  rpc Rill(cp.Empty) returns (cp.Empty) {
+    option (cp.go_custom) = true;
+    option (cp.url) = "/rill/{path...}";
+    option (cp.http_method) = HTTP_METHOD_ANY;
+    option (cp.compression) = COMPRESSION_MODE_NEVER;
+  }
+}
+```
+
+```go
+m.HandleFunc("/", ...)
+m.HandleFunc("/rill/{path...}", ...)
+```
+
+Rules, all enforced when the contract is parsed:
+
+- A route is a **wildcard** when its path has a `{name}` or `{name...}` segment or ends in `/` (a subtree, `/` itself included). Wildcard routes and `HTTP_METHOD_ANY` routes require `cp.go_custom = true`: the handler reads the match through `r.PathValue("name")` or `r.URL.Path`. `HTTP_METHOD_ANY` also requires `cp.Empty` input.
+- Wildcard routes get no Go, JS, or TS client method, since nothing typed can call them.
+- An RPC whose name has no verb prefix and no `cp.http_method` is an error rather than a silently dropped route.
+- Every service's patterns are registered into a scratch `http.ServeMux` at generation time, so an invalid pattern or a conflict between two RPCs fails generation with ServeMux's own message instead of panicking when the server starts. ServeMux precedence applies: `GET /v1/healthz` beats `/`, and `/rill/{path...}` beats `/`, but `/rill/{path...}` conflicts with `GET /` because each is more specific on a different axis, so a catch-all that must coexist with an `ANY` wildcard has to be `ANY` itself.
 
 ### JSON request and response bodies
 

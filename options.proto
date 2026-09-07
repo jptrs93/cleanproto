@@ -53,6 +53,16 @@ enum CompressionMode {
   COMPRESSION_MODE_NEVER = 2;
 }
 
+enum HttpMethod {
+  HTTP_METHOD_UNSPECIFIED = 0;
+  HTTP_METHOD_ANY = 1;
+  HTTP_METHOD_GET = 2;
+  HTTP_METHOD_POST = 3;
+  HTTP_METHOD_PUT = 4;
+  HTTP_METHOD_PATCH = 5;
+  HTTP_METHOD_DELETE = 6;
+}
+
 message AccessPolicy {
   AccessPolicyType policy_type = 1;
   repeated string scopes = 2;
@@ -115,4 +125,5 @@ extend google.protobuf.MethodOptions {
   //     option (cp.compression) = COMPRESSION_MODE_NEVER;
   //   }
   bool multipart_response = 50035;
+  HttpMethod http_method = 50036;
 }

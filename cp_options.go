@@ -182,3 +182,12 @@ var E_MultipartResponse = &protoimpl.ExtensionInfo{
 	Tag:           "varint,50035,opt,name=multipart_response",
 	Filename:      OptionsProtoPath,
 }
+
+var E_HttpMethod = &protoimpl.ExtensionInfo{
+	ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+	ExtensionType: (*int32)(nil),
+	Field:         50036,
+	Name:          "cp.http_method",
+	Tag:           "varint,50036,opt,name=http_method,enum=cp.HttpMethod",
+	Filename:      OptionsProtoPath,
+}

@@ -1494,3 +1494,98 @@ func TestBuildGoFileDataOptionalFieldsKeepExplicitZero(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildGoMuxFileEmitsWildcardRoutes(t *testing.T) {
+	file := ir.File{
+		GoPackage: "example",
+		Messages: []ir.Message{{
+			Name:     "Health",
+			FullName: "example.Health",
+			Fields:   []ir.Field{{Name: "ok", Kind: ir.KindBool}},
+		}},
+		Services: []ir.Service{{
+			Name: "ExampleService",
+			Methods: []ir.Method{
+				{Name: "Static", InputFullName: "cp.Empty", OutputFullName: "cp.Empty", GoCustom: true, URL: "/", HTTPMethod: ir.HTTPMethodAny},
+				{Name: "Rill", InputFullName: "cp.Empty", OutputFullName: "cp.Empty", GoCustom: true, URL: "/rill/{path...}", HTTPMethod: ir.HTTPMethodAny},
+				{Name: "GetThingV1", InputFullName: "cp.Empty", OutputFullName: "cp.Empty", GoCustom: true, URL: "/v1/thing/{id}"},
+				{Name: "GetV1Healthz", InputFullName: "cp.Empty", OutputFullName: "example.Health"},
+			},
+		}},
+	}
+	msgIndex := map[string]ir.Message{}
+	for _, msg := range file.Messages {
+		msgIndex[msg.FullName] = msg
+	}
+
+	mux, err := buildGoMuxFile(file, msgIndex, nil, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoMuxFile: %v", err)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "mux.gen.go", mux, parser.AllErrors); err != nil {
+		t.Fatalf("generated mux should parse: %v\n%s", err, mux)
+	}
+	checks := []string{
+		"m.HandleFunc(\"/\", ",
+		"m.HandleFunc(\"/rill/{path...}\", ",
+		"m.HandleFunc(\"GET /v1/thing/{id}\", ",
+		"m.HandleFunc(\"GET /v1/healthz\", ",
+		"Static(context.Context, *http.Request, http.ResponseWriter) error",
+		"Rill(context.Context, *http.Request, http.ResponseWriter) error",
+	}
+	for _, check := range checks {
+		if !strings.Contains(mux, check) {
+			t.Fatalf("expected generated mux to contain %q, got:\n%s", check, mux)
+		}
+	}
+
+	client, err := buildGoClientFile(file, msgIndex, file.GoPackage, "")
+	if err != nil {
+		t.Fatalf("buildGoClientFile: %v", err)
+	}
+	for _, absent := range []string{"Static(", "Rill(", "GetThingV1("} {
+		if strings.Contains(client, absent) {
+			t.Fatalf("expected generated client to skip wildcard route %q, got:\n%s", absent, client)
+		}
+	}
+	if !strings.Contains(client, "func (c *ExampleCapi) GetV1Healthz(ctx context.Context) (*Health, error)") {
+		t.Fatalf("expected generated client to keep the exact route, got:\n%s", client)
+	}
+}
+
+func TestBuildGoMuxFileRejectsWildcardMisuse(t *testing.T) {
+	tests := []struct {
+		name    string
+		methods []ir.Method
+		want    string
+	}{
+		{
+			name:    "wildcard without custom",
+			methods: []ir.Method{{Name: "GetThingV1", InputFullName: "cp.Empty", OutputFullName: "cp.Empty", URL: "/v1/thing/{id}"}},
+			want:    "requires cp.go_custom",
+		},
+		{
+			name: "conflict",
+			methods: []ir.Method{
+				{Name: "Get", InputFullName: "cp.Empty", OutputFullName: "cp.Empty", GoCustom: true},
+				{Name: "Rill", InputFullName: "cp.Empty", OutputFullName: "cp.Empty", GoCustom: true, URL: "/rill/{path...}", HTTPMethod: ir.HTTPMethodAny},
+			},
+			want: "conflicts",
+		},
+		{
+			name:    "verbless",
+			methods: []ir.Method{{Name: "Rill", InputFullName: "cp.Empty", OutputFullName: "cp.Empty", GoCustom: true}},
+			want:    "cp.http_method",
+		},
+	}
+	for _, tc := range tests {
+		file := ir.File{
+			GoPackage: "example",
+			Services:  []ir.Service{{Name: "ExampleService", Methods: tc.methods}},
+		}
+		_, err := buildGoMuxFile(file, map[string]ir.Message{}, nil, file.GoPackage, "")
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: error = %v, want containing %q", tc.name, err, tc.want)
+		}
+	}
+}

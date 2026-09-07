@@ -161,13 +161,14 @@ func buildJSCapiFile(file ir.File, msgIndex map[string]ir.Message) (string, erro
 	hasClientStream := false
 	for _, svc := range file.Services {
 		for _, m := range svc.Methods {
-			httpMethod, path, ok := deriveHTTP(m.Name)
-			if !ok {
+			route, err := m.Route()
+			if err != nil {
+				return "", err
+			}
+			if route.Wildcard {
 				continue
 			}
-			if m.URL != "" {
-				path = m.URL
-			}
+			httpMethod, path := route.Method, route.Path
 			// A multipart body is a frame sequence, not one encoded message, so
 			// the unary client emitted below would silently misread it. There is
 			// no JS multipart client yet, and erroring here would stop a whole
@@ -494,78 +495,6 @@ func normalizeJsMethodName(name string) string {
 		b.WriteString(string(r))
 	}
 	return b.String()
-}
-
-func deriveHTTP(name string) (method string, path string, ok bool) {
-	prefixes := []string{"Get", "Post", "Put", "Patch", "Delete"}
-	method = ""
-	rest := ""
-	for _, p := range prefixes {
-		if strings.HasPrefix(name, p) {
-			method = strings.ToUpper(p)
-			rest = strings.TrimPrefix(name, p)
-			break
-		}
-	}
-	if method == "" || rest == "" {
-		return "", "", false
-	}
-	version := ""
-	if strings.HasSuffix(rest, "V1") {
-		rest = strings.TrimSuffix(rest, "V1")
-		version = "v1"
-	}
-	underscoreParts := strings.Split(rest, "_")
-	if len(underscoreParts) == 0 {
-		return "", "", false
-	}
-	first := camelWords(underscoreParts[0])
-	if len(first) == 0 {
-		return "", "", false
-	}
-	base := "/"
-	if version != "" {
-		base += version
-		if len(first) > 0 {
-			base += "/"
-		}
-	}
-	base += strings.Join(first, "/")
-	if len(underscoreParts) == 1 {
-		return method, base, true
-	}
-	for _, seg := range underscoreParts[1:] {
-		words := camelWords(seg)
-		if len(words) == 0 {
-			continue
-		}
-		base += "-" + strings.Join(words, "-")
-	}
-	return method, base, true
-}
-
-func camelWords(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var out []string
-	var b strings.Builder
-	runes := []rune(s)
-	for i, r := range runes {
-		if i > 0 {
-			prev := runes[i-1]
-			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
-			if unicode.IsUpper(r) && (unicode.IsLower(prev) || (unicode.IsUpper(prev) && nextLower) || unicode.IsDigit(prev)) {
-				out = append(out, strings.ToLower(b.String()))
-				b.Reset()
-			}
-		}
-		b.WriteRune(r)
-	}
-	if b.Len() > 0 {
-		out = append(out, strings.ToLower(b.String()))
-	}
-	return out
 }
 
 type jsFileData struct {

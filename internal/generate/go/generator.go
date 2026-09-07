@@ -177,13 +177,14 @@ func buildGoClientFile(file ir.File, msgIndex map[string]ir.Message, pkg string,
 		}
 		clientNames[cs.Name] = struct{}{}
 		for _, m := range svc.Methods {
-			httpMethod, path, ok := deriveHTTPGo(m.Name)
-			if !ok {
+			route, err := m.Route()
+			if err != nil {
+				return "", err
+			}
+			if route.Wildcard {
 				continue
 			}
-			if m.URL != "" {
-				path = m.URL
-			}
+			httpMethod, path := route.Method, route.Path
 			inType, ok := goClientMessageNameByFullName(msgIndex, m.InputFullName)
 			if !ok {
 				return "", fmt.Errorf("unknown service input type: %s", m.InputFullName)
@@ -797,6 +798,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 		Handler          string
 		HTTPMethod       string
 		Path             string
+		Pattern          string
 		Input            string
 		Output           string
 		InputEmpty       bool
@@ -826,15 +828,16 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 	hasStream := false
 	auditNeeds := computeAuditMessages(file, msgIndex)
 	for _, svc := range file.Services {
+		if err := ir.ValidateRoutes(svc); err != nil {
+			return "", err
+		}
 		svcMethods := make([]muxMethod, 0, len(svc.Methods))
 		for _, m := range svc.Methods {
-			httpMethod, path, ok := deriveHTTPGo(m.Name)
-			if !ok {
-				continue
+			route, err := m.Route()
+			if err != nil {
+				return "", err
 			}
-			if m.URL != "" {
-				path = m.URL
-			}
+			httpMethod, path := route.Method, route.Path
 			in, ok := msgIndex[m.InputFullName]
 			if !ok {
 				if strings.HasSuffix(m.InputFullName, ".Empty") {
@@ -892,6 +895,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 				Handler:          normalizeGoMethodName(m.Name),
 				HTTPMethod:       httpMethod,
 				Path:             path,
+				Pattern:          route.Pattern(),
 				Input:            in.Name,
 				Output:           out.Name,
 				InputEmpty:       in.Name == "Empty" || strings.HasSuffix(m.InputFullName, ".Empty"),
@@ -1565,9 +1569,7 @@ func buildGoMuxFile(file ir.File, msgIndex map[string]ir.Message, validateNeeds 
 			writeRouteHandlerBody(m)
 			b.WriteString("\t}\n")
 			b.WriteString("\tm.HandleFunc(\"")
-			b.WriteString(m.HTTPMethod)
-			b.WriteString(" ")
-			b.WriteString(m.Path)
+			b.WriteString(m.Pattern)
 			b.WriteString("\", buildHandlerFunc(config, verifyAuth, ")
 			b.WriteString(accessPolicyName)
 			b.WriteString(", ")
@@ -1643,81 +1645,6 @@ func compressionModeLiteral(mode int32) string {
 	default:
 		return "compressionModeAuto"
 	}
-}
-
-func deriveHTTPGo(name string) (method string, path string, ok bool) {
-	prefixes := []string{"Get", "Post", "Put", "Patch", "Delete"}
-	method = ""
-	rest := ""
-	for _, p := range prefixes {
-		if strings.HasPrefix(name, p) {
-			method = strings.ToUpper(p)
-			rest = strings.TrimPrefix(name, p)
-			break
-		}
-	}
-	if method == "" || rest == "" {
-		if name == "Get" {
-			return "GET", "/", true
-		}
-		return "", "", false
-	}
-	if rest == "Root" {
-		return method, "/", true
-	}
-	version := ""
-	if strings.HasSuffix(rest, "V1") {
-		rest = strings.TrimSuffix(rest, "V1")
-		version = "v1"
-	}
-	parts := strings.Split(rest, "_")
-	first := goCamelWords(parts[0])
-	if len(first) == 0 {
-		return "", "", false
-	}
-	base := "/"
-	if version != "" {
-		base += version
-		if len(first) > 0 {
-			base += "/"
-		}
-	}
-	base += strings.Join(first, "/")
-	if len(parts) == 1 {
-		return method, base, true
-	}
-	for _, seg := range parts[1:] {
-		words := goCamelWords(seg)
-		if len(words) == 0 {
-			continue
-		}
-		base += "-" + strings.Join(words, "-")
-	}
-	return method, base, true
-}
-
-func goCamelWords(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var out []string
-	var b strings.Builder
-	runes := []rune(s)
-	for i, r := range runes {
-		if i > 0 {
-			prev := runes[i-1]
-			nextLower := i+1 < len(runes) && unicode.IsLower(runes[i+1])
-			if unicode.IsUpper(r) && (unicode.IsLower(prev) || (unicode.IsUpper(prev) && nextLower) || unicode.IsDigit(prev)) {
-				out = append(out, strings.ToLower(b.String()))
-				b.Reset()
-			}
-		}
-		b.WriteRune(r)
-	}
-	if b.Len() > 0 {
-		out = append(out, strings.ToLower(b.String()))
-	}
-	return out
 }
 
 func normalizeGoMethodName(name string) string {
