@@ -88,8 +88,10 @@ function writeTimestamp(value, writer) {
         return;
     }
     const ms = value.getTime();
+    const epochNanoseconds = value.epochNanoseconds;
+    const precise = typeof epochNanoseconds === "bigint" && Number(epochNanoseconds >= 0n ? epochNanoseconds / 1000000n : (epochNanoseconds - 999999n) / 1000000n) === ms;
     const seconds = Math.floor(ms / 1000);
-    const nanos = Math.floor((ms - (seconds * 1000)) * 1e6);
+    const nanos = precise ? Number(epochNanoseconds - BigInt(seconds) * 1000000000n) : Math.floor((ms - (seconds * 1000)) * 1e6);
     writer.uint32(tag(1, WIRE.VARINT)).int64(seconds);
     if (nanos !== 0) {
         writer.uint32(tag(2, WIRE.VARINT)).int32(nanos);
@@ -115,7 +117,10 @@ function decodeTimestampMessage(reader, length) {
                 reader.skipType(tag & 7);
         }
     }
-    return new Date((seconds * 1000) + Math.floor(nanos / 1e6));
+    const date = new Date((seconds * 1000) + Math.floor(nanos / 1e6));
+    // Keep protobuf precision without changing Date display/JSON behavior.
+    Object.defineProperty(date, "epochNanoseconds", {value: BigInt(seconds) * 1000000000n + BigInt(nanos)});
+    return date;
 }
 {{- end}}
 {{- if .NeedsTimestampNative}}
