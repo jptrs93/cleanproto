@@ -97,6 +97,16 @@ const jsStreamHelperSource = `async function* readLengthPrefixedFrames(body, dec
 `
 
 func (g Generator) Generate(files []ir.File, options generate.Options) ([]generate.OutputFile, error) {
+	if options.JsOut == "" {
+		return nil, nil
+	}
+	for _, file := range files {
+		for _, msg := range file.Messages {
+			if len(msg.Oneofs) > 0 {
+				return nil, fmt.Errorf("js generation of oneofs is not supported yet: %s", msg.FullName)
+			}
+		}
+	}
 	tmpl, err := template.ParseFS(templates.FS, "js_file.tmpl")
 	if err != nil {
 		return nil, err

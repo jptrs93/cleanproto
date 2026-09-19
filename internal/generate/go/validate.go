@@ -53,6 +53,12 @@ func buildGoValidateFile(file ir.File, msgIndex map[string]ir.Message, enumIndex
 	out.WriteString("\n\n")
 
 	imports := []string{}
+	if strings.Contains(bodies.String(), "time.") {
+		imports = append(imports, "time")
+	}
+	if strings.Contains(bodies.String(), "uuid.") {
+		imports = append(imports, "github.com/google/uuid")
+	}
 	if g.needBytes {
 		imports = append(imports, "bytes")
 	}
@@ -160,38 +166,8 @@ func (g *validateGen) addPattern(p string) (string, error) {
 
 func computeValidateNeeds(msgIndex map[string]ir.Message) map[string]bool {
 	needs := map[string]bool{}
-	for fullName, msg := range msgIndex {
-		for _, field := range msg.Fields {
-			if field.GoIgnore {
-				continue
-			}
-			if !field.Constraints.IsEmpty() {
-				needs[fullName] = true
-				break
-			}
-		}
-	}
-	for {
-		added := false
-		for fullName, msg := range msgIndex {
-			if needs[fullName] {
-				continue
-			}
-			for _, field := range msg.Fields {
-				if field.GoIgnore {
-					continue
-				}
-				target := validateMessageTarget(field)
-				if target != "" && needs[target] {
-					needs[fullName] = true
-					added = true
-					break
-				}
-			}
-		}
-		if !added {
-			break
-		}
+	for name := range msgIndex {
+		needs[name] = true
 	}
 	return needs
 }
@@ -215,15 +191,26 @@ func validateMessageTarget(field ir.Field) string {
 func (g *validateGen) emitValidate(b *strings.Builder, msg ir.Message) error {
 	b.WriteString("func (m *")
 	b.WriteString(msg.Name)
-	b.WriteString(") Validate() error {\n")
+	b.WriteString(") Validate() error { return m.validate(make(map[any]bool)) }\n")
+	fmt.Fprintf(b, "func (m *%s) validate(seen map[any]bool) error {\n", msg.Name)
+	b.WriteString("if m == nil { return newValidationError(nil, \"message is nil\") }\n")
+	b.WriteString("if seen[m] { return newValidationError(nil, \"cyclic message graph cannot be encoded\") }; seen[m] = true; defer delete(seen,m)\n")
+	for _, group := range msg.Oneofs {
+		receiver := "m." + ir.GoName(group.Name)
+		if group.Required {
+			fmt.Fprintf(b, "if err := %s.Validate(); err != nil { return wrapValidationError(err, %q) }\n", receiver, group.Name)
+		} else {
+			fmt.Fprintf(b, "if %s.Present { if err := %s.Value.Validate(); err != nil { return wrapValidationError(err, %q) } }\n", receiver, receiver, group.Name)
+		}
+	}
 	for _, field := range msg.Fields {
 		if field.GoIgnore {
 			continue
 		}
 		if field.Constraints.Ignore == ir.IgnoreAlways {
-			continue
+			field.Constraints = ir.FieldConstraints{}
 		}
-		if err := g.emitField(b, field); err != nil {
+		if err := g.emitPresenceField(b, msg, field); err != nil {
 			return err
 		}
 	}
@@ -280,12 +267,6 @@ func (g *validateGen) emitOptionalScalarField(b *strings.Builder, field ir.Field
 
 func (g *validateGen) emitScalarField(b *strings.Builder, field ir.Field, receiver, pathExpr string) error {
 	cs := field.Constraints
-	if cs.Required {
-		cond := zeroValueCondition(field, receiver)
-		if cond != "" {
-			g.emitRequiredCheck(b, cond, pathExpr)
-		}
-	}
 	if !hasScalarRules(cs) {
 		return nil
 	}
@@ -817,7 +798,7 @@ func (g *validateGen) emitMessageField(b *strings.Builder, field ir.Field, recei
 	b.WriteString(" != nil {\n")
 	b.WriteString("\t\tif err := ")
 	b.WriteString(receiver)
-	b.WriteString(".Validate(); err != nil {\n")
+	b.WriteString(".validate(seen); err != nil {\n")
 	b.WriteString("\t\t\treturn wrapValidationError(err, ")
 	b.WriteString(pathExpr)
 	b.WriteString(")\n")
@@ -828,9 +809,7 @@ func (g *validateGen) emitMessageField(b *strings.Builder, field ir.Field, recei
 
 func (g *validateGen) emitRepeatedField(b *strings.Builder, field ir.Field, receiver, pathExpr string) error {
 	cs := field.Constraints
-	if cs.Required {
-		g.emitRequiredCheck(b, "len("+receiver+") == 0", pathExpr)
-	}
+
 	if cs.Repeated != nil {
 		if cs.Repeated.MinItems != nil {
 			n := *cs.Repeated.MinItems
@@ -882,14 +861,14 @@ func (g *validateGen) emitRepeatedField(b *strings.Builder, field ir.Field, rece
 		valueSlice := goRepeatedValueSlice(field)
 		if !valueSlice {
 			b.WriteString("\t\tif item != nil {\n")
-			b.WriteString("\t\t\tif err := item.Validate(); err != nil {\n")
+			b.WriteString("\t\t\tif err := item.validate(seen); err != nil {\n")
 			b.WriteString("\t\t\t\treturn wrapValidationError(err, ")
 			b.WriteString(itemPath)
 			b.WriteString(")\n")
 			b.WriteString("\t\t\t}\n")
 			b.WriteString("\t\t}\n")
 		} else {
-			b.WriteString("\t\tif err := item.Validate(); err != nil {\n")
+			b.WriteString("\t\tif err := item.validate(seen); err != nil {\n")
 			b.WriteString("\t\t\treturn wrapValidationError(err, ")
 			b.WriteString(itemPath)
 			b.WriteString(")\n")
@@ -964,9 +943,7 @@ func uniqueKeyShape(field ir.Field) (keyType string, transform string, ok bool) 
 
 func (g *validateGen) emitMapField(b *strings.Builder, field ir.Field, receiver, pathExpr string) error {
 	cs := field.Constraints
-	if cs.Required {
-		g.emitRequiredCheck(b, "len("+receiver+") == 0", pathExpr)
-	}
+
 	if cs.Map != nil {
 		if cs.Map.MinPairs != nil {
 			n := *cs.Map.MinPairs
@@ -1017,8 +994,8 @@ func (g *validateGen) emitMapField(b *strings.Builder, field ir.Field, receiver,
 		}
 	}
 	if needsRecurseMessage {
-		b.WriteString("\t\tif v != nil {\n")
-		b.WriteString("\t\t\tif err := v.Validate(); err != nil {\n")
+		b.WriteString("\t\t{\n")
+		b.WriteString("\t\t\tif err := v.validate(seen); err != nil {\n")
 		b.WriteString("\t\t\t\treturn wrapValidationError(err, ")
 		b.WriteString(keyPath)
 		b.WriteString(")\n")

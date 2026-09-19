@@ -1,0 +1,492 @@
+package choices
+
+import (
+	"bytes"
+	"encoding/json"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
+	"testing"
+	"time"
+)
+
+func TestPresenceRoundTrip(t *testing.T) {
+	var number int32
+	original := Coverage{Count: Maybe[int32]{Value: int32(0), Present: true}, Data: Maybe[[]byte]{Value: []byte{}, Present: true}, Updated: Maybe[time.Time]{Value: time.Unix(0, 0).UTC(), Present: true}, Delay: Maybe[time.Duration]{Value: time.Duration(0), Present: true}, Items: []AcmeCertSource{{}, {Email: "a"}}, ByName: map[string]AcmeCertSource{"zero": {}}, Choice: Maybe[CoverageChoiceOneof]{Value: CoverageChoiceOneof{Number: &number}, Present: true}}
+	wire, err := original.EncodeChecked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeCoverage(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := decoded.Count.Value, decoded.Count.Present; !ok || v != 0 {
+		t.Fatal("lost present zero")
+	}
+	if v, ok := decoded.Data.Value, decoded.Data.Present; !ok || len(v) != 0 {
+		t.Fatal("lost present empty bytes")
+	}
+	if v, ok := decoded.Updated.Value, decoded.Updated.Present; !ok || !v.Equal(time.Unix(0, 0)) {
+		t.Fatal("lost epoch timestamp")
+	}
+	if v, ok := decoded.Delay.Value, decoded.Delay.Present; !ok || v != 0 {
+		t.Fatal("lost zero duration")
+	}
+	if len(decoded.Items) != 2 || decoded.Items[0].Email != "" || decoded.Items[1].Email != "a" {
+		t.Fatal("changed repeated positions")
+	}
+	if _, ok := decoded.ByName["zero"]; !ok {
+		t.Fatal("lost zero map message")
+	}
+	c, ok := decoded.Choice.Value, decoded.Choice.Present
+	if !ok || c.Number == nil || *c.Number != 0 {
+		t.Fatal("lost selected zero")
+	}
+	absent, err := DecodeCoverage(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if absent.Count.Present || absent.Data.Present || absent.Updated.Present || absent.Delay.Present || absent.Choice.Present {
+		t.Fatal("absence became presence")
+	}
+}
+func TestChoiceValidationAndWrapper(t *testing.T) {
+	c := CertSource{}
+	if _, err := c.EncodeChecked(); err == nil {
+		t.Fatal("empty required choice accepted")
+	}
+	c.Value = CertSourceValueOneof{Acme: &AcmeCertSource{}}
+	if _, err := c.EncodeChecked(); err != nil {
+		t.Fatal(err)
+	}
+	config := HttpsConfig{CertSource: Maybe[CertSource]{Value: c, Present: true}}
+	d, err := DecodeHttpsConfig(config.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, ok := d.CertSource.Value, d.CertSource.Present
+	if !ok || inner.Value.Acme == nil {
+		t.Fatal("wrapper changed")
+	}
+	x := Coverage{Choice: Maybe[CoverageChoiceOneof]{Value: CoverageChoiceOneof{}, Present: true}}
+	if x.Validate() == nil {
+		t.Fatal("present empty choice accepted")
+	}
+	zero := int32(0)
+	x.Choice = Maybe[CoverageChoiceOneof]{Value: CoverageChoiceOneof{Number: &zero, Acme: &AcmeCertSource{}}, Present: true}
+	if _, err := x.EncodeChecked(); err == nil {
+		t.Fatal("multiple alternatives accepted")
+	}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Encode silently accepted invalid choice")
+		}
+	}()
+	x.Encode()
+}
+func TestChoiceMergeAndLastWins(t *testing.T) {
+	a := AcmeCertSource{Email: "first", Domains: []string{"a"}}
+	b := AcmeCertSource{Domains: []string{"b"}}
+	wire := AppendBytesElem(nil, a.Encode(), 8)
+	wire = AppendBytesElem(wire, b.Encode(), 8)
+	got, err := DecodeCoverage(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := got.Choice.Value, got.Choice.Present
+	if c.Acme == nil || c.Acme.Email != "first" || len(c.Acme.Domains) != 2 {
+		t.Fatal("same alternative failed to merge")
+	}
+	wire = AppendInt32Elem(wire, 0, 9)
+	got, err = DecodeCoverage(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ = got.Choice.Value, got.Choice.Present
+	if c.Acme != nil || c.Number == nil || *c.Number != 0 {
+		t.Fatal("different alternative did not replace")
+	}
+	wire = AppendBytesElem(wire, b.Encode(), 8)
+	got, err = DecodeCoverage(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ = got.Choice.Value, got.Choice.Present
+	if c.Acme == nil || c.Acme.Email != "" || len(c.Acme.Domains) != 1 {
+		t.Fatal("old cleared alternative resurrected")
+	}
+}
+func TestUnknownFields(t *testing.T) {
+	unknown := AppendBytesElem(nil, []byte("future"), 99)
+	wire := AppendInt32Elem(nil, 0, 9)
+	wire = append(wire, unknown...)
+	got, err := DecodeCoverage(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.UnknownFields(), unknown) {
+		t.Fatal("unknown lost")
+	}
+	copy := got.UnknownFields()
+	copy[0] = 0
+	if !bytes.Equal(got.UnknownFields(), unknown) {
+		t.Fatal("unknown storage exposed")
+	}
+	again, err := DecodeCoverage(got.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again.UnknownFields(), unknown) {
+		t.Fatal("unknown lost on reencode")
+	}
+	future, err := DecodeCoverage(unknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if future.Choice.Present {
+		t.Fatal("unknown field guessed as choice")
+	}
+	if _, err := DecodeCoverage([]byte{0x42, 0x80}); err == nil {
+		t.Fatal("malformed wire accepted")
+	}
+}
+func TestJSONPresence(t *testing.T) {
+	x := HttpsConfig{Enabled: Maybe[bool]{Value: false, Present: true}}
+	data, err := json.Marshal(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"enabled":false}` {
+		t.Fatalf("unexpected JSON %s", data)
+	}
+	var got HttpsConfig
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := got.Enabled.Value, got.Enabled.Present; !ok || v {
+		t.Fatal("lost JSON presence")
+	}
+	if err := json.Unmarshal([]byte(`{"enabled":null}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled.Present {
+		t.Fatal("JSON null not absent")
+	}
+}
+func TestRecursivePresence(t *testing.T) {
+	x := Node{Next: Maybe[*Node]{Value: &Node{}, Present: true}, Children: []Node{{}}}
+	got, err := DecodeNode(x.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := got.Next.Value, got.Next.Present; !ok || v == nil {
+		t.Fatal("recursive presence lost")
+	}
+	x.Next = Maybe[*Node]{Present: true}
+	if x.Validate() == nil {
+		t.Fatal("present nil recursive message accepted")
+	}
+}
+func TestRequiredMeansPresence(t *testing.T) {
+	x := RequiredFields{Count: Maybe[int32]{Value: int32(0), Present: true}}
+	if err := x.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	x.Count = Maybe[int32]{}
+	if x.Validate() == nil {
+		t.Fatal("missing required optional accepted")
+	}
+}
+
+func TestAuditChoiceAndPresence(t *testing.T) {
+	secret := SecretCertSource{Name: "visible", Secret: []byte("hidden")}
+	x := HttpsConfig{CertSource: Maybe[CertSource]{Value: CertSource{Value: CertSourceValueOneof{Secret: &secret}}, Present: true}}
+	projected := x.ToAudit()
+	data, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("hidden")) || bytes.Contains(data, []byte("aGlkZGVu")) {
+		t.Fatalf("audit leaked secret %s", data)
+	}
+	if !bytes.Contains(data, []byte("visible")) {
+		t.Fatalf("audit dropped label %s", data)
+	}
+	outer, ok := projected.CertSource.Value, projected.CertSource.Present
+	if !ok || outer.Value.Secret == nil {
+		t.Fatal("audit lost choice presence")
+	}
+}
+func TestPresentZeroTime(t *testing.T) {
+	x := Coverage{Updated: Maybe[time.Time]{Value: time.Time{}, Present: true}}
+	got, err := DecodeCoverage(x.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, ok := got.Updated.Value, got.Updated.Present
+	if !ok || !v.IsZero() {
+		t.Fatalf("zero time changed: %v %v", v, ok)
+	}
+}
+
+func TestScalarChoiceAndNativeMerge(t *testing.T) {
+	flag, text, status, updated, delay := false, "", Status(999), time.Time{}, time.Duration(0)
+	var data []byte
+	tests := []ScalarChoiceValueOneof{ScalarChoiceValueOneof{Flag: &flag}, ScalarChoiceValueOneof{Text: &text}, ScalarChoiceValueOneof{Data: &data}, ScalarChoiceValueOneof{Status: &status}, ScalarChoiceValueOneof{Updated: &updated}, ScalarChoiceValueOneof{Delay: &delay}}
+	for _, choice := range tests {
+		x := ScalarChoice{Value: Maybe[ScalarChoiceValueOneof]{Value: choice, Present: true}}
+		got, err := DecodeScalarChoice(x.Encode())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, ok := got.Value.Value, got.Value.Present
+		if !ok || (c.Flag == nil) != (choice.Flag == nil) || (c.Text == nil) != (choice.Text == nil) || (c.Data == nil) != (choice.Data == nil) || (c.Status == nil) != (choice.Status == nil) || (c.Updated == nil) != (choice.Updated == nil) || (c.Delay == nil) != (choice.Delay == nil) {
+			t.Fatal("lost scalar selection")
+		}
+	}
+	seconds := AppendInt64Elem(nil, 100, 1)
+	nanos := AppendInt32Elem(nil, 123, 2)
+	wire := AppendBytesElem(nil, seconds, 5)
+	wire = AppendBytesElem(wire, nanos, 5)
+	got, err := DecodeScalarChoice(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := got.Value.Value, got.Value.Present
+	if c.Updated == nil || !c.Updated.Equal(time.Unix(100, 123)) {
+		t.Fatal("native message failed to merge")
+	}
+}
+func TestPackedMergeUnknownEnumAndIgnored(t *testing.T) {
+	a := Packed{Values: []int32{1, 2}}
+	b := Packed{Values: []int32{3}}
+	wire := append(a.Encode(), b.Encode()...)
+	wire = AppendInt32Elem(wire, 4, 1)
+	wire = AppendInt32Elem(wire, 999, 2)
+	wire = AppendInt32Elem(wire, 123, 3)
+	got, err := DecodePacked(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Values) != 4 || got.Values[3] != 4 {
+		t.Fatal("multiple packed/unpacked chunks lost")
+	}
+	if v, ok := got.State.Value, got.State.Present; !ok || v != 999 {
+		t.Fatal("unknown numeric enum lost")
+	}
+	if len(got.UnknownFields()) != 0 {
+		t.Fatal("ignored field preserved as unknown")
+	}
+	again, err := DecodePacked(got.Encode())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := again.State.Value, again.State.Present; !ok || v != 999 {
+		t.Fatal("unknown numeric enum lost on reencode")
+	}
+}
+func TestAuditCollections(t *testing.T) {
+	secret := SecretCertSource{Name: "visible", Secret: []byte("hidden")}
+	x := AuditCollections{Single: Maybe[SecretCertSource]{Value: secret, Present: true}, Values: []SecretCertSource{secret}, Pointers: []*SecretCertSource{&secret, nil}, ByName: map[string]SecretCertSource{"s": secret}, Required: secret}
+	out := x.ToAudit()
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("aGlkZGVu")) {
+		t.Fatal("secret leaked")
+	}
+	if len(out.Values) != 1 || out.Values[0].Name != "visible" || len(out.Pointers) != 2 || out.Pointers[1] != nil || out.ByName["s"].Name != "visible" {
+		t.Fatal("audit changed collection shape")
+	}
+}
+func TestJSONPresentNilBytes(t *testing.T) {
+	data, err := json.Marshal(Coverage{Data: Maybe[[]byte]{Present: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Coverage
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := got.Data.Value, got.Data.Present; !ok || len(v) != 0 {
+		t.Fatal("JSON lost present nil bytes")
+	}
+}
+
+// Compare our decoder/encoder with the standard protobuf runtime, independently
+// of our generated code's own round-trip behavior.
+func TestStandardProtobufOneofCompatibility(t *testing.T) {
+	optional := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL
+	repeated := descriptorpb.FieldDescriptorProto_LABEL_REPEATED
+	str := descriptorpb.FieldDescriptorProto_TYPE_STRING
+	msg := descriptorpb.FieldDescriptorProto_TYPE_MESSAGE
+	fd, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
+		Name: proto.String("oracle.proto"), Package: proto.String("oracle"), Syntax: proto.String("proto3"),
+		MessageType: []*descriptorpb.DescriptorProto{
+			{Name: proto.String("Child"), Field: []*descriptorpb.FieldDescriptorProto{
+				{Name: proto.String("label"), Number: proto.Int32(1), Type: &str, Label: &optional},
+				{Name: proto.String("items"), Number: proto.Int32(2), Type: &str, Label: &repeated},
+			}},
+			{Name: proto.String("Root"), OneofDecl: []*descriptorpb.OneofDescriptorProto{{Name: proto.String("value")}}, Field: []*descriptorpb.FieldDescriptorProto{
+				{Name: proto.String("acme"), Number: proto.Int32(1), Type: &msg, Label: &optional, TypeName: proto.String(".oracle.Child"), OneofIndex: proto.Int32(0)},
+				{Name: proto.String("secret"), Number: proto.Int32(2), Type: &msg, Label: &optional, TypeName: proto.String(".oracle.Child"), OneofIndex: proto.Int32(0)},
+			}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := AcmeCertSource{Email: "a", Domains: []string{"x"}}
+	b := AcmeCertSource{Domains: []string{"y"}}
+	first := AppendBytesElem(nil, a.Encode(), 1)
+	merged := AppendBytesElem(bytes.Clone(first), b.Encode(), 1)
+	replaced := AppendBytesElem(bytes.Clone(merged), AppendStringElem(nil, "secret", 1), 2)
+	unknown := AppendInt32Elem(bytes.Clone(first), 77, 99)
+	cases := [][]byte{AppendBytesElem(nil, nil, 1), first, merged, replaced, AppendBytesElem(bytes.Clone(replaced), b.Encode(), 1), unknown}
+	for _, wire := range cases {
+		want := dynamicpb.NewMessage(fd.Messages().ByName("Root"))
+		if err := proto.Unmarshal(wire, want); err != nil {
+			t.Fatal(err)
+		}
+		ours, err := DecodeCertSource(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := ours.EncodeChecked()
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual := dynamicpb.NewMessage(want.Descriptor())
+		if err := proto.Unmarshal(encoded, actual); err != nil {
+			t.Fatal(err)
+		}
+		if !proto.Equal(want, actual) {
+			t.Fatalf("protobuf mismatch: want %s, got %s", want, actual)
+		}
+	}
+}
+
+func TestCyclicGraphRejected(t *testing.T) {
+	n := &Node{}
+	n.Next = Maybe[*Node]{Value: n, Present: true}
+	if _, err := n.EncodeChecked(); err == nil {
+		t.Fatal("cyclic graph accepted")
+	}
+	if _, err := json.Marshal(n); err == nil {
+		t.Fatal("cyclic JSON accepted")
+	}
+}
+
+func TestJSONSelectedNilBytes(t *testing.T) {
+	var dataValue []byte
+	x := ScalarChoice{Value: Maybe[ScalarChoiceValueOneof]{Value: ScalarChoiceValueOneof{Data: &dataValue}, Present: true}}
+	data, err := json.Marshal(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got ScalarChoice
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	choice, ok := got.Value.Value, got.Value.Present
+	if !ok || choice.Data == nil || len(*choice.Data) != 0 {
+		t.Fatalf("selected bytes lost: %s", data)
+	}
+}
+
+func TestConstraintsAndIgnoredChoice(t *testing.T) {
+	emptyText, validText := "", "ok"
+	var number int32
+	x := Constrained{}
+	if err := x.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	x.Count = Maybe[int32]{Value: int32(0), Present: true}
+	if x.Validate() == nil {
+		t.Fatal("numeric constraint ignored")
+	}
+	x.Count = Maybe[int32]{Value: int32(1), Present: true}
+	x.State = Maybe[Status]{Value: Status(999), Present: true}
+	if x.Validate() == nil {
+		t.Fatal("defined-only enum constraint ignored")
+	}
+	x.State = Maybe[Status]{Value: Status_STATUS_READY, Present: true}
+	x.Value = Maybe[ConstrainedValueOneof]{Value: ConstrainedValueOneof{Text: &emptyText}, Present: true}
+	if x.Validate() == nil {
+		t.Fatal("selected string constraint ignored")
+	}
+	x.Value = Maybe[ConstrainedValueOneof]{Value: ConstrainedValueOneof{Number: &number}, Present: true}
+	if x.Validate() == nil {
+		t.Fatal("selected number constraint ignored")
+	}
+	x.Value = Maybe[ConstrainedValueOneof]{Value: ConstrainedValueOneof{Text: &validText}, Present: true}
+	if err := x.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	wire := AppendInt32Elem(nil, 1, 9)
+	wire = AppendStringElem(wire, "ignored", 12)
+	got, err := DecodeCoverage(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Choice.Present {
+		t.Fatal("ignored alternative did not clear preceding choice")
+	}
+}
+
+func TestAbsentPublicValueIsIgnored(t *testing.T) {
+	number := int32(9)
+	x := Coverage{
+		Count:  Maybe[int32]{Value: 42},
+		Choice: Maybe[CoverageChoiceOneof]{Value: CoverageChoiceOneof{Number: &number, Acme: &AcmeCertSource{}}},
+	}
+	wire, err := x.EncodeChecked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeCoverage(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Count.Present || got.Choice.Present {
+		t.Fatal("absent payload was encoded")
+	}
+	data, err := json.Marshal(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(`"count"`)) || bytes.Contains(data, []byte(`"choice"`)) {
+		t.Fatalf("absent payload reached JSON: %s", data)
+	}
+	// Toggling presence directly must restore validation of the same payload.
+	x.Choice.Present = true
+	if x.Validate() == nil {
+		t.Fatal("present ambiguous choice accepted")
+	}
+	x.Choice.Value.Acme = nil
+	if err := x.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	x.Choice.Value.Number = nil
+	if x.Validate() == nil {
+		t.Fatal("present empty choice accepted")
+	}
+	// A stale recursive payload must also be ignored while absent.
+	cycle := &Node{}
+	cycle.Next = Maybe[*Node]{Value: cycle, Present: true}
+	root := Node{Next: Maybe[*Node]{Value: cycle}}
+	if _, err := root.EncodeChecked(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := json.Marshal(root); err != nil {
+		t.Fatal(err)
+	}
+	required := RequiredFields{Count: Maybe[int32]{Value: 42}}
+	if required.Validate() == nil {
+		t.Fatal("stale value satisfied required presence")
+	}
+}

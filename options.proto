@@ -80,7 +80,10 @@ extend google.protobuf.FieldOptions {
   string go_type = 50010;
   bool go_encode = 50012;
   bool go_ignore = 50014;
+  // Repeated messages use []T by default. Set true to request []*T storage.
   bool go_slice_ptr = 50021;
+  // Opt a singular message out of presence tracking: use T instead of Maybe[T].
+  // Missing input becomes T's zero value; empty messages are still emitted.
   bool go_value = 50022;
 
   string js_type = 50011;

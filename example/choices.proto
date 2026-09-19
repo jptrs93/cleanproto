@@ -1,0 +1,92 @@
+syntax = "proto3";
+package choices;
+option go_package = "choices";
+import "options.proto";
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+message AcmeCertSource {
+  string email = 1;
+  repeated string domains = 2;
+}
+message SecretCertSource {
+  string name = 1;
+  bytes secret = 2 [(cp.audit_ignore) = true];
+}
+// The wrapper is preserved, including when value is its only field.
+message CertSource {
+  oneof value {
+    option (buf.validate.oneof).required = true;
+    AcmeCertSource acme = 1;
+    SecretCertSource secret = 2;
+  }
+}
+message HttpsConfig {
+  optional bool enabled = 1;
+  CertSource cert_source = 7;
+}
+message Coverage {
+  optional int32 count = 1;
+  optional bytes data = 2;
+  google.protobuf.Timestamp updated = 3;
+  google.protobuf.Duration delay = 4;
+  repeated AcmeCertSource items = 5;
+  map<string, AcmeCertSource> by_name = 6;
+  AcmeCertSource required_child = 7 [(cp.go_value) = true];
+  oneof choice {
+    AcmeCertSource acme = 8;
+    int32 number = 9;
+    bytes blob = 10;
+  string ignored = 12 [(cp.go_ignore) = true];
+    SecretCertSource secret = 11;
+  }
+}
+message Node {
+  Node next = 1;
+  repeated Node children = 2;
+}
+message RequiredFields {
+ optional int32 count = 1 [(buf.validate.field).required = true];
+ string label = 2 [(buf.validate.field).required = true];
+ repeated string names = 3 [(buf.validate.field).required = true];
+}
+
+service ConfigService {
+ rpc PostAuditCollections(AuditCollections) returns (AuditCollections) { option (cp.audit) = AUDIT_MODE_FULL; }
+ rpc PostConfig(HttpsConfig) returns (Coverage) { option (cp.audit) = AUDIT_MODE_FULL; }
+}
+
+enum Status { STATUS_UNSPECIFIED = 0; STATUS_READY = 1; }
+message ScalarChoice {
+ oneof value {
+  bool flag = 1;
+  string text = 2;
+  bytes data = 3;
+  Status status = 4;
+  google.protobuf.Timestamp updated = 5;
+  google.protobuf.Duration delay = 6;
+  bytes uuid = 7 [(cp.go_type) = "github.com/google/uuid.UUID"];
+ }
+}
+message AuditCollections {
+ SecretCertSource single = 1;
+ repeated SecretCertSource values = 2;
+ repeated SecretCertSource pointers = 3 [(cp.go_slice_ptr) = true];
+ map<string, SecretCertSource> by_name = 4;
+ SecretCertSource required = 5 [(cp.go_value) = true];
+}
+message Packed {
+ repeated int32 values = 1;
+ optional Status state = 2;
+ int32 ignored = 3 [(cp.go_ignore) = true];
+}
+
+message Constrained {
+ optional int32 count = 1 [(buf.validate.field).int32.gte = 1];
+ optional Status state = 2 [(buf.validate.field).enum.defined_only = true];
+ oneof value {
+  string text = 3 [(buf.validate.field).string.min_len = 1];
+  int32 number = 4 [(buf.validate.field).int32.gt = 0];
+ }
+}

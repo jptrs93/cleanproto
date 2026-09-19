@@ -161,32 +161,32 @@ func TestBuildGoFileDataGoValueMessageField(t *testing.T) {
 	if parent.Fields[0].Type != "Child" {
 		t.Fatalf("expected go_value message field to be Child, got %q", parent.Fields[0].Type)
 	}
-	if parent.Fields[1].Type != "*Child" {
-		t.Fatalf("expected default message field to stay *Child, got %q", parent.Fields[1].Type)
+	if parent.Fields[1].Type != "Maybe[Child]" {
+		t.Fatalf("expected default message field to use Maybe[Child], got %q", parent.Fields[1].Type)
 	}
 	if !child.HasIsZero || !strings.Contains(child.IsZeroExpr, "m.Count == 0") || !strings.Contains(child.IsZeroExpr, "m.Label == \"\"") {
 		t.Fatalf("expected Child IsZero expression for value-message encoding, got has=%v expr=%q", child.HasIsZero, child.IsZeroExpr)
 	}
 	encode := strings.Join(parent.EncodeLines, "\n")
-	if !strings.Contains(encode, "if !m.ValueChild.IsZero() {") {
-		t.Fatalf("expected value message encode to skip zero nested message, got:\n%s", encode)
+	if !strings.Contains(encode, "value := &m.ValueChild") {
+		t.Fatalf("expected value message encode to preserve an empty nested message, got:\n%s", encode)
 	}
-	if !strings.Contains(encode, "b = AppendBytes(b, m.ValueChild.Encode())") {
+	if !strings.Contains(encode, "b = AppendBytes(b, value.encodeUnchecked())") {
 		t.Fatalf("expected value message encode to include non-zero nested message, got:\n%s", encode)
 	}
-	if !strings.Contains(encode, "if m.PointerChild != nil {") {
-		t.Fatalf("expected default message encode to keep pointer nil guard, got:\n%s", encode)
+	if !strings.Contains(encode, "if m.PointerChild.Present {") {
+		t.Fatalf("expected default message encode to check explicit presence, got:\n%s", encode)
 	}
 
 	var decode strings.Builder
 	for _, c := range parent.DecodeCases {
 		decode.WriteString(strings.Join(c.Lines, "\n"))
 	}
-	if !strings.Contains(decode.String(), "m.ValueChild = *item") {
+	if !strings.Contains(decode.String(), "m.ValueChild = *value") {
 		t.Fatalf("expected value message decode to assign decoded value, got:\n%s", decode.String())
 	}
-	if !strings.Contains(decode.String(), "m.PointerChild = item") {
-		t.Fatalf("expected default message decode to keep pointer assignment, got:\n%s", decode.String())
+	if !strings.Contains(decode.String(), "m.PointerChild = Maybe[Child]{Value: *value, Present: true}") {
+		t.Fatalf("expected default message decode to restore explicit presence, got:\n%s", decode.String())
 	}
 }
 
@@ -244,8 +244,8 @@ func TestBuildGoFileDataRepeatedElementsKeepPositions(t *testing.T) {
 	if strings.Contains(encode, "if item.IsZero() {") || strings.Contains(encode, "if item == 0 {") {
 		t.Fatalf("expected repeated timestamp/duration elements to be emitted unconditionally, got:\n%s", encode)
 	}
-	if !strings.Contains(encode, "b = AppendTag(b, 3, BytesType)\nif item == nil {\nb = AppendBytes(b, nil)\ncontinue\n}") {
-		t.Fatalf("expected nil repeated message element to write an empty message in place, got:\n%s", encode)
+	if !strings.Contains(encode, "b = AppendTag(b, 3, BytesType)\nb = AppendBytes(b, item.encodeUnchecked())") {
+		t.Fatalf("expected repeated message values to preserve empty elements, got:\n%s", encode)
 	}
 }
 
@@ -282,7 +282,7 @@ func TestBuildGoFileDataPackageLocalCustomGoType(t *testing.T) {
 	if msg.Fields[0].Type != "StatusCode" {
 		t.Fatalf("expected singular custom field type, got %q", msg.Fields[0].Type)
 	}
-	if msg.Fields[1].Type != "*StatusCode" {
+	if msg.Fields[1].Type != "Maybe[StatusCode]" {
 		t.Fatalf("expected optional custom field type, got %q", msg.Fields[1].Type)
 	}
 	if msg.Fields[2].Type != "[]StatusCode" {
@@ -292,8 +292,8 @@ func TestBuildGoFileDataPackageLocalCustomGoType(t *testing.T) {
 	encode := strings.Join(msg.EncodeLines, "\n")
 	encodeChecks := []string{
 		"b = AppendInt32Field(b, int32(m.Status), 1)",
-		"if m.StatusOpt != nil {",
-		"b = AppendInt32Elem(b, int32(*m.StatusOpt), 2)",
+		"if m.StatusOpt.Present {",
+		"b = AppendInt32Elem(b, int32(*value), 2)",
 		"packed = AppendInt32Compact(packed, int32(item))",
 	}
 	for _, check := range encodeChecks {
@@ -311,7 +311,7 @@ func TestBuildGoFileDataPackageLocalCustomGoType(t *testing.T) {
 		"var raw int32",
 		"m.Status = StatusCode(raw)",
 		"tmp := StatusCode(raw)",
-		"m.StatusOpt = &tmp",
+		"m.StatusOpt = Maybe[StatusCode]{Value: *value, Present: true}",
 		"m.Statuses = append(m.Statuses, StatusCode(raw))",
 	}
 	for _, check := range decodeChecks {
@@ -551,7 +551,7 @@ func TestBuildGoMuxFileEmitsBidiStreamingHandler(t *testing.T) {
 		"respSeq := h.PostLibraryBookLookupV1(authCtx, reqSeq)",
 		"stream := NewStreamWriter(w)",
 		"for resp, yieldErr := range respSeq {",
-		"stream.Write(resp.Encode())",
+		"stream.Write(payload)",
 		"stream.Finish(authCtx, streamErr)",
 		"m.HandleFunc(\"POST /v1/library/book-lookup\"",
 		", true))",
@@ -1040,12 +1040,12 @@ func TestGoGeneratorMovesIsZeroToEncodeFile(t *testing.T) {
 			{
 				Name:     "Child",
 				FullName: "example.Child",
-				Fields: []ir.Field{{Name: "label", Number: 1, Kind: ir.KindString, GoEncode: true}},
+				Fields:   []ir.Field{{Name: "label", Number: 1, Kind: ir.KindString, GoEncode: true}},
 			},
 			{
 				Name:     "Parent",
 				FullName: "example.Parent",
-				Fields: []ir.Field{{Name: "value_child", Number: 1, Kind: ir.KindMessage, MessageFullName: "example.Child", GoEncode: true, GoValue: true}},
+				Fields:   []ir.Field{{Name: "value_child", Number: 1, Kind: ir.KindMessage, MessageFullName: "example.Child", GoEncode: true, GoValue: true}},
 			},
 		},
 	}
@@ -1477,11 +1477,11 @@ func TestBuildGoFileDataOptionalFieldsKeepExplicitZero(t *testing.T) {
 	}
 	encode := strings.Join(data.Messages[0].EncodeLines, "\n")
 	encodeChecks := []string{
-		"b = AppendInt64FieldOpt(b, m.Count, 1)",
-		"b = AppendInt32Elem(b, int32(*m.Status), 2)",
-		"b = AppendBytesElem(b, *m.Blob, 3)",
-		"b = AppendBytesElem(b, EncodeTimestamp(*m.SeenAt), 4)",
-		"b = AppendBytesElem(b, EncodeDuration(*m.Wait), 5)",
+		"b = AppendInt64FieldOpt(b, value, 1)",
+		"b = AppendInt32Elem(b, int32(*value), 2)",
+		"b = AppendBytesElem(b, *value, 3)",
+		"b = AppendBytesElem(b, EncodeTimestamp(*value), 4)",
+		"b = AppendBytesElem(b, EncodeDuration(*value), 5)",
 	}
 	for _, check := range encodeChecks {
 		if !strings.Contains(encode, check) {

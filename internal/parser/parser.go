@@ -33,7 +33,8 @@ func (p *Parser) Parse(ctx context.Context, filePaths []string) ([]ir.File, erro
 		},
 	}
 	compiler := protocompile.Compiler{
-		Resolver: protocompile.WithStandardImports(resolver),
+		Resolver:       protocompile.WithStandardImports(resolver),
+		SourceInfoMode: protocompile.SourceInfoStandard,
 	}
 	builtins, err := loadBuiltinCatalog(ctx, compiler)
 	if err != nil {
@@ -143,7 +144,7 @@ func ensureApiErr(file *ir.File, builtins builtinCatalog) {
 }
 
 func ensurePolicyTypes(file *ir.File, builtins builtinCatalog) {
-	if !hasPolicyUsage(file.Services) {
+	if len(file.Services) == 0 {
 		return
 	}
 	if !hasEnumName(file.Enums, "AccessPolicyType") {
@@ -158,17 +159,6 @@ func ensurePolicyTypes(file *ir.File, builtins builtinCatalog) {
 			file.Messages = append(file.Messages, msg)
 		}
 	}
-}
-
-func hasPolicyUsage(services []ir.Service) bool {
-	for _, svc := range services {
-		for _, method := range svc.Methods {
-			if method.PolicyType != 0 || len(method.PolicyScopes) > 0 {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func hasMessageName(messages []ir.Message, name string) bool {
@@ -265,6 +255,7 @@ func collectMessages(messages protoreflect.MessageDescriptors, prefix []string, 
 		nameParts := append(prefix, string(msg.Name()))
 		msgName := ir.GoName(joinName(nameParts))
 		irMsg := ir.Message{
+			Doc:      descriptorComment(msg),
 			Name:     msgName,
 			FullName: string(msg.FullName()),
 		}
@@ -276,6 +267,23 @@ func collectMessages(messages protoreflect.MessageDescriptors, prefix []string, 
 			return nil, err
 		}
 		irMsg.Fields = fields
+		for j := 0; j < msg.Oneofs().Len(); j++ {
+			group := msg.Oneofs().Get(j)
+			if group.IsSynthetic() {
+				continue
+			}
+			required := false
+			rules := findExtensionMessage(group.Options().ProtoReflect(), bufValidateExtensionNumber, "buf.validate.oneof")
+			if rules != nil {
+				rules.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+					if fd.Name() == "required" {
+						required = v.Bool()
+					}
+					return true
+				})
+			}
+			irMsg.Oneofs = append(irMsg.Oneofs, ir.Oneof{Name: string(group.Name()), Required: required, Doc: descriptorComment(group)})
+		}
 		result = append(result, irMsg)
 
 		nested, err := collectMessages(msg.Messages(), nameParts, vc)
@@ -293,12 +301,14 @@ func collectEnums(enums protoreflect.EnumDescriptors, prefix []string) ([]ir.Enu
 		enum := enums.Get(i)
 		nameParts := append(prefix, string(enum.Name()))
 		irEnum := ir.Enum{
+			Doc:      descriptorComment(enum),
 			Name:     ir.GoName(joinName(nameParts)),
 			FullName: string(enum.FullName()),
 		}
 		for j := 0; j < enum.Values().Len(); j++ {
 			value := enum.Values().Get(j)
 			irEnum.Values = append(irEnum.Values, ir.EnumValue{
+				Doc:    descriptorComment(value),
 				Name:   string(value.Name()),
 				Number: int32(value.Number()),
 			})
@@ -334,8 +344,9 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 	var result []ir.Field
 	for i := 0; i < fields.Len(); i++ {
 		field := fields.Get(i)
+		oneofName := ""
 		if oneof := field.ContainingOneof(); oneof != nil && !oneof.IsSynthetic() {
-			return nil, fmt.Errorf("oneof is not supported: %s", field.FullName())
+			oneofName = string(oneof.Name())
 		}
 		kind, err := kindFromField(field)
 		if err != nil {
@@ -459,6 +470,8 @@ func collectFields(fields protoreflect.FieldDescriptors, vc *validateContext) ([
 			return nil, err
 		}
 		result = append(result, ir.Field{
+			Doc:             descriptorComment(field),
+			OneofName:       oneofName,
 			Name:            ir.JsName(string(field.Name())),
 			ProtoName:       string(field.Name()),
 			Number:          int(field.Number()),
@@ -628,4 +641,9 @@ func joinName(parts []string) string {
 		return ""
 	}
 	return strings.Join(parts, "_")
+}
+
+func descriptorComment(d protoreflect.Descriptor) string {
+	loc := d.ParentFile().SourceLocations().ByDescriptor(d)
+	return strings.TrimSpace(loc.LeadingComments)
 }

@@ -2,7 +2,23 @@
 
 package example
 
+// Encode panics if validation fails. Use EncodeChecked for untrusted values.
 func (m *Book) Encode() []byte {
+	b, err := m.EncodeChecked()
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (m *Book) EncodeChecked() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	return m.encodeUnchecked(), nil
+}
+
+func (m *Book) encodeUnchecked() []byte {
 	var b []byte
 	b = AppendStringField(b, m.ID, 1)
 	b = AppendStringField(b, m.Title, 2)
@@ -11,15 +27,24 @@ func (m *Book) Encode() []byte {
 	b = AppendStringField(b, m.Genre, 5)
 	b = AppendInt32Field(b, int32(m.Status), 6)
 	b = AppendRepeated(b, m.Tags, AppendFieldDecorator(AppendStringElem, 7))
-	return b
+	return append(b, m.unknownFields...)
 }
 
+func (m *Book) UnknownFields() []byte { return append([]byte(nil), m.unknownFields...) }
+
 func DecodeBook(b []byte) (*Book, error) {
-	var m Book
+	return mergeBook(b, nil)
+}
+
+func mergeBook(b []byte, m *Book) (*Book, error) {
+	if m == nil {
+		m = new(Book)
+	}
 	var num Number
 	var typ Type
 	var err error
 	for len(b) > 0 {
+		original := b
 		b, num, typ, err = ConsumeTag(b)
 		if err != nil {
 			return nil, err
@@ -49,36 +74,60 @@ func DecodeBook(b []byte) (*Book, error) {
 			}
 		default:
 			b, err = SkipFieldValue(b, num, typ)
+			if err == nil {
+				m.unknownFields = append(m.unknownFields, original[:len(original)-len(b)]...)
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &m, nil
+	return m, nil
 }
 
+// Encode panics if validation fails. Use EncodeChecked for untrusted values.
 func (m *Library) Encode() []byte {
+	b, err := m.EncodeChecked()
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (m *Library) EncodeChecked() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	return m.encodeUnchecked(), nil
+}
+
+func (m *Library) encodeUnchecked() []byte {
 	var b []byte
 	b = AppendStringField(b, m.ID, 1)
 	b = AppendStringField(b, m.Name, 2)
 	for _, item := range m.Books {
 		b = AppendTag(b, 3, BytesType)
-		if item == nil {
-			b = AppendBytes(b, nil)
-			continue
-		}
-		b = AppendBytes(b, item.Encode())
+		b = AppendBytes(b, item.encodeUnchecked())
 	}
-	return b
+	return append(b, m.unknownFields...)
 }
 
+func (m *Library) UnknownFields() []byte { return append([]byte(nil), m.unknownFields...) }
+
 func DecodeLibrary(b []byte) (*Library, error) {
-	var m Library
+	return mergeLibrary(b, nil)
+}
+
+func mergeLibrary(b []byte, m *Library) (*Library, error) {
+	if m == nil {
+		m = new(Library)
+	}
 	var num Number
 	var typ Type
 	var err error
 	var msgBytes []byte
 	for len(b) > 0 {
+		original := b
 		b, num, typ, err = ConsumeTag(b)
 		if err != nil {
 			return nil, err
@@ -94,31 +143,59 @@ func DecodeLibrary(b []byte) (*Library, error) {
 				var item *Book
 				item, err = DecodeBook(msgBytes)
 				if err == nil {
-					m.Books = append(m.Books, item)
+					m.Books = append(m.Books, *item)
 				}
 			}
 		default:
 			b, err = SkipFieldValue(b, num, typ)
+			if err == nil {
+				m.unknownFields = append(m.unknownFields, original[:len(original)-len(b)]...)
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &m, nil
+	return m, nil
 }
 
+// Encode panics if validation fails. Use EncodeChecked for untrusted values.
 func (m *GetBookReq) Encode() []byte {
-	var b []byte
-	b = AppendStringField(b, m.ID, 1)
+	b, err := m.EncodeChecked()
+	if err != nil {
+		panic(err)
+	}
 	return b
 }
 
+func (m *GetBookReq) EncodeChecked() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	return m.encodeUnchecked(), nil
+}
+
+func (m *GetBookReq) encodeUnchecked() []byte {
+	var b []byte
+	b = AppendStringField(b, m.ID, 1)
+	return append(b, m.unknownFields...)
+}
+
+func (m *GetBookReq) UnknownFields() []byte { return append([]byte(nil), m.unknownFields...) }
+
 func DecodeGetBookReq(b []byte) (*GetBookReq, error) {
-	var m GetBookReq
+	return mergeGetBookReq(b, nil)
+}
+
+func mergeGetBookReq(b []byte, m *GetBookReq) (*GetBookReq, error) {
+	if m == nil {
+		m = new(GetBookReq)
+	}
 	var num Number
 	var typ Type
 	var err error
 	for len(b) > 0 {
+		original := b
 		b, num, typ, err = ConsumeTag(b)
 		if err != nil {
 			return nil, err
@@ -128,30 +205,58 @@ func DecodeGetBookReq(b []byte) (*GetBookReq, error) {
 			b, m.ID, err = ConsumeString(b, typ)
 		default:
 			b, err = SkipFieldValue(b, num, typ)
+			if err == nil {
+				m.unknownFields = append(m.unknownFields, original[:len(original)-len(b)]...)
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &m, nil
+	return m, nil
 }
 
+// Encode panics if validation fails. Use EncodeChecked for untrusted values.
 func (m *CheckoutBookReq) Encode() []byte {
+	b, err := m.EncodeChecked()
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (m *CheckoutBookReq) EncodeChecked() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	return m.encodeUnchecked(), nil
+}
+
+func (m *CheckoutBookReq) encodeUnchecked() []byte {
 	var b []byte
 	b = AppendStringField(b, m.LibraryID, 1)
 	b = AppendStringField(b, m.BookID, 2)
 	b = AppendStringField(b, m.BorrowerEmail, 3)
 	b = AppendMap(b, m.Metadata, 4, AppendFieldDecorator(AppendStringField, 1), AppendFieldDecorator(AppendStringField, 2))
 	b = AppendBytesField(b, m.Signature, 5)
-	return b
+	return append(b, m.unknownFields...)
 }
 
+func (m *CheckoutBookReq) UnknownFields() []byte { return append([]byte(nil), m.unknownFields...) }
+
 func DecodeCheckoutBookReq(b []byte) (*CheckoutBookReq, error) {
-	var m CheckoutBookReq
+	return mergeCheckoutBookReq(b, nil)
+}
+
+func mergeCheckoutBookReq(b []byte, m *CheckoutBookReq) (*CheckoutBookReq, error) {
+	if m == nil {
+		m = new(CheckoutBookReq)
+	}
 	var num Number
 	var typ Type
 	var err error
 	for len(b) > 0 {
+		original := b
 		b, num, typ, err = ConsumeTag(b)
 		if err != nil {
 			return nil, err
@@ -172,27 +277,232 @@ func DecodeCheckoutBookReq(b []byte) (*CheckoutBookReq, error) {
 			b, m.Signature, err = ConsumeBytesCopy(b, typ)
 		default:
 			b, err = SkipFieldValue(b, num, typ)
+			if err == nil {
+				m.unknownFields = append(m.unknownFields, original[:len(original)-len(b)]...)
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &m, nil
+	return m, nil
 }
 
-func (m *ApiErr) Encode() []byte {
-	var b []byte
-	b = AppendInt32Field(b, m.Code, 1)
-	b = AppendStringField(b, m.DisplayErr, 2)
+// Encode panics if validation fails. Use EncodeChecked for untrusted values.
+func (m *BookDetailRes) Encode() []byte {
+	b, err := m.EncodeChecked()
+	if err != nil {
+		panic(err)
+	}
 	return b
 }
 
-func DecodeApiErr(b []byte) (*ApiErr, error) {
-	var m ApiErr
+func (m *BookDetailRes) EncodeChecked() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	return m.encodeUnchecked(), nil
+}
+
+func (m *BookDetailRes) encodeUnchecked() []byte {
+	var b []byte
+	{
+		if m.Book.Present {
+			v := m.Book.Value
+			value := &v
+			if value != nil {
+				b = AppendTag(b, 1, BytesType)
+				b = AppendBytes(b, value.encodeUnchecked())
+			}
+		}
+	}
+	{
+		if m.Library.Present {
+			v := m.Library.Value
+			value := &v
+			if value != nil {
+				b = AppendTag(b, 2, BytesType)
+				b = AppendBytes(b, value.encodeUnchecked())
+			}
+		}
+	}
+	return append(b, m.unknownFields...)
+}
+
+func (m *BookDetailRes) UnknownFields() []byte { return append([]byte(nil), m.unknownFields...) }
+
+func DecodeBookDetailRes(b []byte) (*BookDetailRes, error) {
+	return mergeBookDetailRes(b, nil)
+}
+
+func mergeBookDetailRes(b []byte, m *BookDetailRes) (*BookDetailRes, error) {
+	if m == nil {
+		m = new(BookDetailRes)
+	}
+	var num Number
+	var typ Type
+	var err error
+	var msgBytes []byte
+	for len(b) > 0 {
+		original := b
+		b, num, typ, err = ConsumeTag(b)
+		if err != nil {
+			return nil, err
+		}
+		switch num {
+		case 1:
+			var value *Book
+			if m.Book.Present {
+				v := m.Book.Value
+				value = &v
+			}
+			b, msgBytes, err = ConsumeMessage(b, typ)
+			if err == nil {
+				var item *Book
+				item, err = mergeBook(msgBytes, value)
+				if err == nil {
+					value = item
+				}
+			}
+			if err == nil {
+				m.Book = Maybe[Book]{Value: *value, Present: true}
+			}
+		case 2:
+			var value *Library
+			if m.Library.Present {
+				v := m.Library.Value
+				value = &v
+			}
+			b, msgBytes, err = ConsumeMessage(b, typ)
+			if err == nil {
+				var item *Library
+				item, err = mergeLibrary(msgBytes, value)
+				if err == nil {
+					value = item
+				}
+			}
+			if err == nil {
+				m.Library = Maybe[Library]{Value: *value, Present: true}
+			}
+		default:
+			b, err = SkipFieldValue(b, num, typ)
+			if err == nil {
+				m.unknownFields = append(m.unknownFields, original[:len(original)-len(b)]...)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+// Encode panics if validation fails. Use EncodeChecked for untrusted values.
+func (m *AccessPolicy) Encode() []byte {
+	b, err := m.EncodeChecked()
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (m *AccessPolicy) EncodeChecked() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	return m.encodeUnchecked(), nil
+}
+
+func (m *AccessPolicy) encodeUnchecked() []byte {
+	var b []byte
+	b = AppendInt32Field(b, int32(m.PolicyType), 1)
+	b = AppendRepeated(b, m.Scopes, AppendFieldDecorator(AppendStringElem, 2))
+	return append(b, m.unknownFields...)
+}
+
+func (m *AccessPolicy) UnknownFields() []byte { return append([]byte(nil), m.unknownFields...) }
+
+func DecodeAccessPolicy(b []byte) (*AccessPolicy, error) {
+	return mergeAccessPolicy(b, nil)
+}
+
+func mergeAccessPolicy(b []byte, m *AccessPolicy) (*AccessPolicy, error) {
+	if m == nil {
+		m = new(AccessPolicy)
+	}
 	var num Number
 	var typ Type
 	var err error
 	for len(b) > 0 {
+		original := b
+		b, num, typ, err = ConsumeTag(b)
+		if err != nil {
+			return nil, err
+		}
+		switch num {
+		case 1:
+			var raw int32
+			b, raw, err = ConsumeVarInt32(b, typ)
+			if err == nil {
+				m.PolicyType = AccessPolicyType(raw)
+			}
+		case 2:
+			var item string
+			b, item, err = ConsumeRepeatedElement(b, typ, ConsumeString)
+			if err == nil {
+				m.Scopes = append(m.Scopes, item)
+			}
+		default:
+			b, err = SkipFieldValue(b, num, typ)
+			if err == nil {
+				m.unknownFields = append(m.unknownFields, original[:len(original)-len(b)]...)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
+}
+
+// Encode panics if validation fails. Use EncodeChecked for untrusted values.
+func (m *ApiErr) Encode() []byte {
+	b, err := m.EncodeChecked()
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+func (m *ApiErr) EncodeChecked() ([]byte, error) {
+	if err := m.Validate(); err != nil {
+		return nil, err
+	}
+	return m.encodeUnchecked(), nil
+}
+
+func (m *ApiErr) encodeUnchecked() []byte {
+	var b []byte
+	b = AppendInt32Field(b, m.Code, 1)
+	b = AppendStringField(b, m.DisplayErr, 2)
+	return append(b, m.unknownFields...)
+}
+
+func (m *ApiErr) UnknownFields() []byte { return append([]byte(nil), m.unknownFields...) }
+
+func DecodeApiErr(b []byte) (*ApiErr, error) {
+	return mergeApiErr(b, nil)
+}
+
+func mergeApiErr(b []byte, m *ApiErr) (*ApiErr, error) {
+	if m == nil {
+		m = new(ApiErr)
+	}
+	var num Number
+	var typ Type
+	var err error
+	for len(b) > 0 {
+		original := b
 		b, num, typ, err = ConsumeTag(b)
 		if err != nil {
 			return nil, err
@@ -206,10 +516,13 @@ func DecodeApiErr(b []byte) (*ApiErr, error) {
 			b, m.InternalErr, err = ConsumeString(b, typ)
 		default:
 			b, err = SkipFieldValue(b, num, typ)
+			if err == nil {
+				m.unknownFields = append(m.unknownFields, original[:len(original)-len(b)]...)
+			}
 		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &m, nil
+	return m, nil
 }

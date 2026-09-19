@@ -11,27 +11,40 @@ const (
 	BookStatus_BOOK_STATUS_LOST        BookStatus = 3
 )
 
+type AccessPolicyType int32
+
+const (
+	AccessPolicyType_ACCESS_POLICY_TYPE_UNSPECIFIED AccessPolicyType = 0
+	AccessPolicyType_NO_AUTH                        AccessPolicyType = 1
+	AccessPolicyType_OPTIONAL_AUTH                  AccessPolicyType = 2
+	AccessPolicyType_ANY_OF                         AccessPolicyType = 3
+)
+
 type Book struct {
-	ID        string     `json:"id,omitempty"`
-	Title     string     `json:"title,omitempty"`
-	Author    string     `json:"author,omitempty"`
-	PageCount int32      `json:"page_count"`
-	Genre     string     `json:"genre,omitempty"`
-	Status    BookStatus `json:"status"`
-	Tags      []string   `json:"tags,omitempty"`
+	unknownFields []byte
+	ID            string     `json:"id,omitempty"`
+	Title         string     `json:"title,omitempty"`
+	Author        string     `json:"author,omitempty"`
+	PageCount     int32      `json:"page_count"`
+	Genre         string     `json:"genre,omitempty"`
+	Status        BookStatus `json:"status"`
+	Tags          []string   `json:"tags,omitempty"`
 }
 
 type Library struct {
-	ID    string  `json:"id,omitempty"`
-	Name  string  `json:"name,omitempty"`
-	Books []*Book `json:"books,omitempty"`
+	unknownFields []byte
+	ID            string `json:"id,omitempty"`
+	Name          string `json:"name,omitempty"`
+	Books         []Book `json:"books,omitempty"`
 }
 
 type GetBookReq struct {
-	ID string `json:"id,omitempty"`
+	unknownFields []byte
+	ID            string `json:"id,omitempty"`
 }
 
 type CheckoutBookReq struct {
+	unknownFields []byte
 	LibraryID     string            `json:"library_id,omitempty"`
 	BookID        string            `json:"book_id,omitempty"`
 	BorrowerEmail string            `json:"borrower_email,omitempty"`
@@ -39,8 +52,22 @@ type CheckoutBookReq struct {
 	Signature     []byte            `json:"signature"`
 }
 
+// The parts of a multipart response, in wire order.
+type BookDetailRes struct {
+	unknownFields []byte
+	Book          Maybe[Book]    `json:"book,omitzero"`
+	Library       Maybe[Library] `json:"library,omitzero"`
+}
+
+type AccessPolicy struct {
+	unknownFields []byte
+	PolicyType    AccessPolicyType `json:"policy_type"`
+	Scopes        []string         `json:"scopes,omitempty"`
+}
+
 type ApiErr struct {
-	Code        int32  `json:"code"`
-	DisplayErr  string `json:"display_err,omitempty"`
-	InternalErr string `json:"internal_err,omitempty"`
+	unknownFields []byte
+	Code          int32  `json:"code"`
+	DisplayErr    string `json:"display_err,omitempty"`
+	InternalErr   string `json:"internal_err,omitempty"`
 }

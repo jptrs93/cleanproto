@@ -1,0 +1,48 @@
+package choices
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+type testServer struct{ calls int }
+
+func (s *testServer) PostConfig(context.Context, *HttpsConfig) (*Coverage, error) {
+	s.calls++
+	return &Coverage{Choice: Maybe[CoverageChoiceOneof]{Value: CoverageChoiceOneof{}, Present: true}}, nil
+}
+func (s *testServer) PostAuditCollections(_ context.Context, x *AuditCollections) (*AuditCollections, error) {
+	s.calls++
+	return x, nil
+}
+
+func TestTransportValidation(t *testing.T) {
+	handler := &testServer{}
+	mux := CreateMux(handler, nil)
+	bad := httptest.NewRequest(http.MethodPost, "/config", strings.NewReader(`{"cert_source":{}}`))
+	bad.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, bad)
+	if response.Code != http.StatusBadRequest || handler.calls != 0 {
+		t.Fatalf("invalid request reached handler: %d, %d", response.Code, handler.calls)
+	}
+	good := httptest.NewRequest(http.MethodPost, "/config", nil)
+	response = httptest.NewRecorder()
+	mux.ServeHTTP(response, good)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("invalid response not rejected: %d", response.Code)
+	}
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	client := NewConfigCapi(srv.URL)
+	calls := handler.calls
+	if _, err := client.PostConfig(context.Background(), &HttpsConfig{CertSource: Maybe[CertSource]{Value: CertSource{}, Present: true}}); err == nil {
+		t.Fatal("client accepted invalid request")
+	}
+	if handler.calls != calls {
+		t.Fatal("invalid client request made HTTP call")
+	}
+}

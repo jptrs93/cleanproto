@@ -29,7 +29,16 @@ func validateUUIDFormat(s string) bool {
 	return true
 }
 
-func (m *Book) Validate() error {
+func (m *Book) Validate() error { return m.validate(make(map[any]bool)) }
+func (m *Book) validate(seen map[any]bool) error {
+	if m == nil {
+		return newValidationError(nil, "message is nil")
+	}
+	if seen[m] {
+		return newValidationError(nil, "cyclic message graph cannot be encoded")
+	}
+	seen[m] = true
+	defer delete(seen, m)
 	if !validateUUIDFormat(m.ID) {
 		return newValidationError([]string{"id"}, "must be a valid UUID")
 	}
@@ -81,7 +90,16 @@ func (m *Book) Validate() error {
 	return nil
 }
 
-func (m *Library) Validate() error {
+func (m *Library) Validate() error { return m.validate(make(map[any]bool)) }
+func (m *Library) validate(seen map[any]bool) error {
+	if m == nil {
+		return newValidationError(nil, "message is nil")
+	}
+	if seen[m] {
+		return newValidationError(nil, "cyclic message graph cannot be encoded")
+	}
+	seen[m] = true
+	defer delete(seen, m)
 	if !validateUUIDFormat(m.ID) {
 		return newValidationError([]string{"id"}, "must be a valid UUID")
 	}
@@ -93,23 +111,39 @@ func (m *Library) Validate() error {
 	}
 	for i, item := range m.Books {
 		_ = i
-		if item != nil {
-			if err := item.Validate(); err != nil {
-				return wrapValidationError(err, fmt.Sprintf("books[%d]", i))
-			}
+		if err := item.validate(seen); err != nil {
+			return wrapValidationError(err, fmt.Sprintf("books[%d]", i))
 		}
 	}
 	return nil
 }
 
-func (m *GetBookReq) Validate() error {
+func (m *GetBookReq) Validate() error { return m.validate(make(map[any]bool)) }
+func (m *GetBookReq) validate(seen map[any]bool) error {
+	if m == nil {
+		return newValidationError(nil, "message is nil")
+	}
+	if seen[m] {
+		return newValidationError(nil, "cyclic message graph cannot be encoded")
+	}
+	seen[m] = true
+	defer delete(seen, m)
 	if !validateUUIDFormat(m.ID) {
 		return newValidationError([]string{"id"}, "must be a valid UUID")
 	}
 	return nil
 }
 
-func (m *CheckoutBookReq) Validate() error {
+func (m *CheckoutBookReq) Validate() error { return m.validate(make(map[any]bool)) }
+func (m *CheckoutBookReq) validate(seen map[any]bool) error {
+	if m == nil {
+		return newValidationError(nil, "message is nil")
+	}
+	if seen[m] {
+		return newValidationError(nil, "cyclic message graph cannot be encoded")
+	}
+	seen[m] = true
+	defer delete(seen, m)
 	if !validateUUIDFormat(m.LibraryID) {
 		return newValidationError([]string{"library_id"}, "must be a valid UUID")
 	}
@@ -136,5 +170,70 @@ func (m *CheckoutBookReq) Validate() error {
 	if len(m.Signature) > 64 {
 		return newValidationError([]string{"signature"}, "must be at most 64 bytes")
 	}
+	return nil
+}
+
+func (m *BookDetailRes) Validate() error { return m.validate(make(map[any]bool)) }
+func (m *BookDetailRes) validate(seen map[any]bool) error {
+	if m == nil {
+		return newValidationError(nil, "message is nil")
+	}
+	if seen[m] {
+		return newValidationError(nil, "cyclic message graph cannot be encoded")
+	}
+	seen[m] = true
+	defer delete(seen, m)
+	{
+		v, present := m.Book.Value, m.Book.Present
+		var value *Book
+		if present {
+			value = &v
+		}
+		if value != nil {
+			if err := value.validate(seen); err != nil {
+				return wrapValidationError(err, "book")
+			}
+		}
+		_ = value
+	}
+	{
+		v, present := m.Library.Value, m.Library.Present
+		var value *Library
+		if present {
+			value = &v
+		}
+		if value != nil {
+			if err := value.validate(seen); err != nil {
+				return wrapValidationError(err, "library")
+			}
+		}
+		_ = value
+	}
+	return nil
+}
+
+func (m *AccessPolicy) Validate() error { return m.validate(make(map[any]bool)) }
+func (m *AccessPolicy) validate(seen map[any]bool) error {
+	if m == nil {
+		return newValidationError(nil, "message is nil")
+	}
+	if seen[m] {
+		return newValidationError(nil, "cyclic message graph cannot be encoded")
+	}
+	seen[m] = true
+	defer delete(seen, m)
+	return nil
+}
+
+func (m *ApiErr) Validate() error { return m.validate(make(map[any]bool)) }
+func (m *ApiErr) validate(seen map[any]bool) error {
+	if m == nil {
+		return newValidationError(nil, "message is nil")
+	}
+	if seen[m] {
+		return newValidationError(nil, "cyclic message graph cannot be encoded")
+	}
+	seen[m] = true
+	defer delete(seen, m)
 	return nil
 }

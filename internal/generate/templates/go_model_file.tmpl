@@ -11,21 +11,22 @@ import (
 {{end}}
 
 {{range .Enums}}
-type {{.Name}} int32
+{{.Doc}}type {{.Name}} int32
 
 const (
 {{- $enumName := .Name}}
 {{- range .Values}}
-    {{.Name}} {{$enumName}} = {{.Number}}
+    {{.Doc}}{{.Name}} {{$enumName}} = {{.Number}}
 {{- end}}
 )
 
 {{end}}
 
 {{range .Messages}}
-type {{.Name}} struct {
+{{.Doc}}type {{.Name}} struct {
+    unknownFields []byte
 {{- range .Fields}}
-    {{.Name}} {{.Type}}{{if .HasJSONTag}} `json:"{{.JSONTag}}"`{{end}}
+    {{.Doc}}{{.Name}} {{.Type}}{{if .HasJSONTag}} `json:"{{.JSONTag}}"`{{end}}
 {{- end}}
 }
 

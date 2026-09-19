@@ -22,6 +22,16 @@ func (g Generator) Name() string {
 }
 
 func (g Generator) Generate(files []ir.File, options generate.Options) ([]generate.OutputFile, error) {
+	if options.TsOut == "" {
+		return nil, nil
+	}
+	for _, file := range files {
+		for _, msg := range file.Messages {
+			if len(msg.Oneofs) > 0 {
+				return nil, fmt.Errorf("ts generation of oneofs is not supported yet: %s", msg.FullName)
+			}
+		}
+	}
 	tmpl, err := template.ParseFS(templates.FS, "ts_file.tmpl")
 	if err != nil {
 		return nil, err

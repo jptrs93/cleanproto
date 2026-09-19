@@ -101,16 +101,18 @@ func main() {
 		tsg.Generator{},
 	}
 
+	var allOutputs []generate.OutputFile
 	for _, gen := range generators {
 		outputs, err := gen.Generate(files, options)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if err := generate.WriteFiles(outputs); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
+		allOutputs = append(allOutputs, outputs...)
+	}
+	if err := generate.WriteFiles(allOutputs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
 

@@ -55,23 +55,36 @@ func (m AuditMode) RecordsRequest() bool { return m == AuditModeRequest || m == 
 func (m AuditMode) RecordsResponse() bool { return m == AuditModeResponse || m == AuditModeFull }
 
 type Enum struct {
+	Doc      string
 	Name     string
 	FullName string
 	Values   []EnumValue
 }
 
 type EnumValue struct {
+	Doc    string
 	Name   string
 	Number int32
 }
 
+type Oneof struct {
+	Doc      string
+	Name     string
+	Required bool
+}
+
 type Message struct {
+	Doc      string
+	Oneofs   []Oneof
 	Name     string
 	FullName string
 	Fields   []Field
 }
 
 type Field struct {
+	Doc             string
+	OneofName       string
+	GoIndirect      bool
 	Name            string
 	ProtoName       string
 	Number          int

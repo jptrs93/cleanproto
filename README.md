@@ -4,6 +4,8 @@ A minimal proto3 generator that generates clean, fast, readable code, supporting
 
 Currently supports Go, JavaScript, and TypeScript.
 
+Go models use `Maybe[T]` for explicit presence, value slices/maps for messages, and named pointer-based choice structs for oneofs. This changes the generated Go API; see [the mapping and migration guide](MIGRATION.md). Oneof support is currently Go-only.
+
 | Language | Models | Client stubs | Server stubs | Server-streaming RPC | Client-streaming RPC | Bidi-streaming RPC |
 | --- | --- | --- | --- | --- | --- | --- |
 | Go | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -45,7 +47,7 @@ Positional args: one or more `.proto` files to generate.
    google.protobuf.Timestamp timestamp = 1 [(cp.js_type) = "Date", (cp.go_type) = "time.Time"];
 ```
 
-This generates models where the `timestamp` field has the type `Date` and `time.Time` in JavaScript and Go respectively.
+This generates `Date` in JavaScript and `Maybe[time.Time]` in Go, preserving the protobuf message's presence.
 
 #### Go
 
@@ -79,6 +81,9 @@ This generates models where the `timestamp` field has the type `Date` and `time.
 
 | Option | Effect |
 | --- | --- |
+| `cp.go_value = true` | Represent a singular message as a value, materializing absent input as its zero value. |
+| `cp.go_slice_ptr = true` | Use pointer elements for repeated messages; the default is `[]T`. |
+| `(buf.validate.oneof).required = true` | Generate a mandatory choice value and validate exactly one selected alternative. |
 | `cp.go_encode = false` | Keep the field in generated Go models, but skip writing it during Go encoding. |
 | `cp.go_ignore = true` | Omit the field completely from generated Go models and their encode/decoding. |
 | `cp.js_encode = false` | Keep the field in generated JavaScript models, but skip writing it during JS encoding. |
@@ -127,67 +132,26 @@ cleanproto \
 ```
 
 <details>
-<summary>Show Go output</summary>
+<summary>Show Go model and usage</summary>
 
 ```go
-package demo
-
-import (
-	"github.com/google/uuid"
-	"time"
-)
-
 type AuditEvent struct {
-	OccurredAt time.Time
-	Timeout    time.Duration
-	RequestID  uuid.UUID
-	ActorID    int64
-	SyncedAt   time.Time
+    OccurredAt time.Time
+    Timeout    Maybe[time.Duration]
+    RequestID  uuid.UUID
+    ActorID    int64
+    SyncedAt   Maybe[time.Time]
+    // Private unknown-field storage omitted.
 }
 
-func (m *AuditEvent) Encode() []byte {
-	var b []byte
-	b = AppendInt64FromTime(b, m.OccurredAt, 1)
-	b = AppendDurationFromDuration(b, m.Timeout, 2)
-	b = AppendBytesFromUUID(b, m.RequestID, 3)
-	b = AppendInt64Field(b, m.ActorID, 4)
-	if !m.SyncedAt.IsZero() {
-		b = AppendBytesField(b, EncodeTimestamp(m.SyncedAt), 5)
-	}
-	return b
-}
-
-func DecodeAuditEvent(b []byte) (*AuditEvent, error) {
-	var m AuditEvent
-	var num Number
-	var typ Type
-	var err error
-	for len(b) > 0 {
-		b, num, typ, err = ConsumeTag(b)
-		if err != nil {
-			return nil, err
-		}
-		switch num {
-		case 1:
-			b, m.OccurredAt, err = ConsumeTimeFromInt64(b, typ)
-		case 2:
-			b, m.Timeout, err = ConsumeDurationFromDuration(b, typ)
-		case 3:
-			b, m.RequestID, err = ConsumeUUIDFromBytes(b, typ)
-		case 4:
-			b, m.ActorID, err = ConsumeVarInt64(b, typ)
-		case 5:
-			b, m.SyncedAt, err = ConsumeTimeFromTimestamp(b, typ)
-		default:
-			b, err = SkipFieldValue(b, num, typ)
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	return &m, nil
-}
+m := AuditEvent{Timeout: Maybe[time.Duration]{Value: 0, Present: true}}
+b, err := m.EncodeChecked()
+// Handle err, then send b. DecodeAuditEvent(b) restores Timeout as present.
 ```
+
+Generated codecs retain unknown fields, preserve present zero values, and expose
+`Validate`, `EncodeChecked`, and the panicking convenience method `Encode`.
+See [the complete Go mapping](MIGRATION.md) for presence and choice semantics.
 
 </details>
 
@@ -881,8 +845,8 @@ export class Capi {
 </details>
 
 ## Notes
-- Unknown fields are ignored on decode.
-- `oneof` not supported.
+- Go retains unknown fields on ordinary messages; native conversions and map-entry envelopes have the limits described in [the migration guide](MIGRATION.md). JS/TS still skip unknown fields.
+- Go supports named oneofs without automatic flattening. JS/TS reject oneof schemas explicitly.
 - `cp.<lang>_ignore = true` takes precedence over `cp.<lang>_encode = false` for that language, since ignored fields are omitted entirely.
 
 ## Todo

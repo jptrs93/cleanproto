@@ -75,6 +75,8 @@ type ServerHandler interface {
 	PostLibraryBookBulkV1(context.Context, iter.Seq2[*Book, error]) (*Library, error)
 	PostLibraryBookLookupV1(context.Context, iter.Seq2[*GetBookReq, error]) iter.Seq2[*Book, error]
 	GetLibraryEventsV1(context.Context) error
+	GetLibraryBookDetailV1(context.Context, *GetBookReq) (func() (*Book, error), func() (*Library, error))
+	Assets(context.Context, *http.Request, http.ResponseWriter) error
 }
 
 func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
@@ -194,7 +196,12 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 				streamErr = fmt.Errorf("streaming err: %w", yieldErr)
 				break
 			}
-			if werr := stream.Write(resp.Encode()); werr != nil {
+			payload, encodeErr := resp.EncodeChecked()
+			if encodeErr != nil {
+				streamErr = encodeErr
+				break
+			}
+			if werr := stream.Write(payload); werr != nil {
 				streamErr = fmt.Errorf("writing stream resp: %w", werr)
 				break
 			}
@@ -212,5 +219,63 @@ func CreateMux(h ServerHandler, config *MuxConfig) *http.ServeMux {
 		w.WriteHeader(http.StatusNoContent)
 	}
 	m.HandleFunc("GET /v1/library/events", buildHandlerFunc(config, verifyAuth, getLibraryEventsV1AccessPolicy, postAuthHandlerGetLibraryEventsV1, compressionModeNever, false))
+	getLibraryBookDetailV1AccessPolicy := AccessPolicy{}
+	postAuthHandlerGetLibraryBookDetailV1 := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+		req, err := decodeWithMaxBodySize(r, config.MaxRequestBodySize, DecodeGetBookReq)
+		if err != nil {
+			HandleReqErr(authCtx, err, r, w)
+			return
+		}
+		if err := req.Validate(); err != nil {
+			HandleReqErr(authCtx, err, r, w)
+			return
+		}
+		partFnBook, partFnLibrary := h.GetLibraryBookDetailV1(authCtx, req)
+		partBook, err := partFnBook()
+		if err != nil {
+			HandleReqErr(authCtx, err, r, w)
+			return
+		}
+		parts := NewPartsWriter(w)
+		var partBytes []byte
+		if partBook != nil {
+			partBytes, err = partBook.EncodeChecked()
+			if err != nil {
+				parts.Abort(authCtx, err)
+				return
+			}
+		}
+		if err := parts.Write(partBytes); err != nil {
+			parts.Abort(authCtx, err)
+			return
+		}
+		partLibrary, err := partFnLibrary()
+		if err != nil {
+			parts.Abort(authCtx, err)
+			return
+		}
+		partBytes = nil
+		if partLibrary != nil {
+			partBytes, err = partLibrary.EncodeChecked()
+			if err != nil {
+				parts.Abort(authCtx, err)
+				return
+			}
+		}
+		if err := parts.Write(partBytes); err != nil {
+			parts.Abort(authCtx, err)
+			return
+		}
+	}
+	m.HandleFunc("GET /v1/library/book-detail", buildHandlerFunc(config, verifyAuth, getLibraryBookDetailV1AccessPolicy, postAuthHandlerGetLibraryBookDetailV1, compressionModeNever, true))
+	assetsAccessPolicy := AccessPolicy{}
+	postAuthHandlerAssets := func(authCtx context.Context, w http.ResponseWriter, r *http.Request) {
+		err := h.Assets(authCtx, r, w)
+		if err != nil {
+			HandleReqErr(authCtx, err, r, w)
+			return
+		}
+	}
+	m.HandleFunc("/assets/{path...}", buildHandlerFunc(config, verifyAuth, assetsAccessPolicy, postAuthHandlerAssets, compressionModeNever, false))
 	return m
 }
