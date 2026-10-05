@@ -539,13 +539,22 @@ func isSupportedTSType(kind ir.Kind, msgName string, tsType string) bool {
 		}
 		return kind == ir.KindMessage && msgName == "google.protobuf.Timestamp"
 	}
-	if kind == ir.KindInt32 || kind == ir.KindInt64 {
+	if kind == ir.KindInt32 || isInt64Kind(kind) {
 		return true
 	}
 	if kind == ir.KindMessage && (msgName == "google.protobuf.Timestamp" || msgName == "google.protobuf.Duration") {
 		return true
 	}
 	return false
+}
+
+func isInt64Kind(kind ir.Kind) bool {
+	switch kind {
+	case ir.KindInt64, ir.KindUint64, ir.KindSint64, ir.KindFixed64, ir.KindSfixed64:
+		return true
+	default:
+		return false
+	}
 }
 
 func isSupportedGoType(kind ir.Kind, msgName string, goType string) bool {
@@ -586,7 +595,7 @@ func isSupportedJSType(kind ir.Kind, msgName string, jsType string) bool {
 	if jsType == "LocalDate" {
 		return kind == ir.KindInt32
 	}
-	if kind == ir.KindInt32 || kind == ir.KindInt64 {
+	if kind == ir.KindInt32 || isInt64Kind(kind) {
 		return true
 	}
 	if kind == ir.KindMessage && (msgName == "google.protobuf.Timestamp" || msgName == "google.protobuf.Duration") {

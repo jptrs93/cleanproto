@@ -63,19 +63,21 @@ This generates `Date` in JavaScript and `Maybe[time.Time]` in Go, preserving the
 | Native type option | Supported wire types |
 | --- | --- |
 | `cp.js_type = "Date"` | `google.protobuf.Timestamp`, `int32`, `int64` |
-| `cp.js_type = "number"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
-| `cp.js_type = "bigint"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+| `cp.js_type = "number"` | `int32`, `int64`, `uint64`, `sint64`, `fixed64`, `sfixed64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+| `cp.js_type = "bigint"` | `int32`, `int64`, `uint64`, `sint64`, `fixed64`, `sfixed64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
 
 #### TypeScript
 
 | Native type option | Supported wire types |
 | --- | --- |
 | `cp.ts_type = "Date"` | `google.protobuf.Timestamp`, `int32`, `int64` |
-| `cp.ts_type = "number"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
-| `cp.ts_type = "bigint"` | `int32`, `int64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+| `cp.ts_type = "number"` | `int32`, `int64`, `uint64`, `sint64`, `fixed64`, `sfixed64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
+| `cp.ts_type = "bigint"` | `int32`, `int64`, `uint64`, `sint64`, `fixed64`, `sfixed64`, `google.protobuf.Timestamp`, `google.protobuf.Duration` |
 
 > [!NOTE]
 > Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native JavaScript type is `Date` but the wire type is `int32`, then values are converted to and from epoch seconds to fit `int32` precision. With `int64`, `Date`/`time.Time` values are converted to and from epoch milliseconds.
+>
+> A 64-bit integer field represented as a JavaScript `number` (JS defaults to `number`; TS defaults to `bigint` unless `cp.ts_type = "number"`) is guarded by `Number.MAX_SAFE_INTEGER`: encoding throws when the value is outside the safe integer range, and decoding throws when the wire value does not fit, instead of silently losing precision.
 
 ### Additional options
 

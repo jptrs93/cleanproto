@@ -61,13 +61,11 @@ function compareMapEntriesInt(a, b) {
 {{- if .NeedsReadInt64}}
 function readInt64(reader, method) {
     const value = reader[method]();
-    if (typeof value === "number") {
-        return value;
+    const n = Number(value);
+    if (!Number.isSafeInteger(n)) {
+        throw new Error("cleanproto: " + method + " value " + value + " is outside the safe integer range");
     }
-    if (typeof value === "bigint") {
-        return Number(value);
-    }
-    return value.toNumber();
+    return n;
 }
 {{- end}}
 {{- if .NeedsReadInt64BigInt}}

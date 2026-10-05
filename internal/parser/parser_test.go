@@ -430,3 +430,40 @@ service DemoService {
 		}
 	}
 }
+
+func TestParseNativeNumberTypesOn64BitKinds(t *testing.T) {
+	for _, kind := range []string{"uint64", "sint64", "fixed64", "sfixed64"} {
+		src := `syntax = "proto3";
+package demo;
+import "options.proto";
+option go_package = "demo";
+message Wide {
+  ` + kind + ` number = 1 [(cp.js_type) = "number", (cp.ts_type) = "number"];
+  ` + kind + ` big = 2 [(cp.js_type) = "bigint", (cp.ts_type) = "bigint"];
+  repeated ` + kind + ` numbers = 3 [(cp.js_type) = "number", (cp.ts_type) = "number"];
+}
+`
+		if err := parseTestProto(t, src); err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+	}
+	for _, field := range []string{
+		`uint64 value = 1 [(cp.js_type) = "Date"];`,
+		`uint64 value = 1 [(cp.ts_type) = "Date"];`,
+		`uint64 value = 1 [(cp.js_type) = "LocalDate"];`,
+		`uint32 value = 1 [(cp.js_type) = "number"];`,
+	} {
+		src := `syntax = "proto3";
+package demo;
+import "options.proto";
+option go_package = "demo";
+message Wide {
+  ` + field + `
+}
+`
+		err := parseTestProto(t, src)
+		if err == nil || !strings.Contains(err.Error(), "unsupported cp.") {
+			t.Fatalf("%s: expected unsupported native type error, got %v", field, err)
+		}
+	}
+}

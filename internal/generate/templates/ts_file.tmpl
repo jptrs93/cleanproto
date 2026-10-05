@@ -65,7 +65,12 @@ type Int64ReaderMethod = "int64" | "uint64" | "sint64" | "fixed64" | "sfixed64";
 {{- end}}
 {{- if .NeedsReadInt64}}
 function readInt64(reader: PBReader, method: Int64ReaderMethod): number {
-    return Number(reader[method]());
+    const value = reader[method]();
+    const n = Number(value);
+    if (!Number.isSafeInteger(n)) {
+        throw new Error("cleanproto: " + method + " value " + value + " is outside the safe integer range");
+    }
+    return n;
 }
 {{- end}}
 {{- if .NeedsReadInt64BigInt}}
