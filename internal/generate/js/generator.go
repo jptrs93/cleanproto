@@ -100,13 +100,6 @@ func (g Generator) Generate(files []ir.File, options generate.Options) ([]genera
 	if options.JsOut == "" {
 		return nil, nil
 	}
-	for _, file := range files {
-		for _, msg := range file.Messages {
-			if len(msg.Oneofs) > 0 {
-				return nil, fmt.Errorf("js generation of oneofs is not supported yet: %s", msg.FullName)
-			}
-		}
-	}
 	tmpl, err := template.ParseFS(templates.FS, "js_file.tmpl")
 	if err != nil {
 		return nil, err
@@ -534,6 +527,13 @@ func buildJSFileData(file ir.File, msgIndex map[string]ir.Message) (jsFileData, 
 	for _, msg := range file.Messages {
 		msgForJS := msg
 		msgForJS.Fields = jsVisibleFields(msg.Fields)
+		for _, name := range messageOneofs(msgForJS) {
+			typedef, err := buildJSOneofTypedef(msgForJS, name, msgIndex)
+			if err != nil {
+				return jsFileData{}, err
+			}
+			data.Typedefs = append(data.Typedefs, typedef)
+		}
 		typedef, err := buildJSTypedef(msgForJS, msgIndex)
 		if err != nil {
 			return jsFileData{}, err
@@ -582,7 +582,24 @@ func buildJSTypedef(msg ir.Message, msgIndex map[string]ir.Message) (string, err
 	b.WriteString(" * @typedef {Object} ")
 	b.WriteString(msg.Name)
 	b.WriteString("\n")
+	seen := map[string]bool{}
 	for _, field := range msg.Fields {
+		if field.OneofName != "" {
+			if seen[field.OneofName] {
+				continue
+			}
+			seen[field.OneofName] = true
+			b.WriteString(" * @property {")
+			b.WriteString(oneofType(msg, field.OneofName))
+			b.WriteString("} ")
+			if oneofRequired(msg, field.OneofName) {
+				b.WriteString(oneofProp(field.OneofName))
+			} else {
+				b.WriteString("[" + oneofProp(field.OneofName) + "]")
+			}
+			b.WriteString("\n")
+			continue
+		}
 		jsType, err := jsDocType(field, msgIndex)
 		if err != nil {
 			return "", err
@@ -594,6 +611,114 @@ func buildJSTypedef(msg ir.Message, msgIndex map[string]ir.Message) (string, err
 		b.WriteString("\n")
 	}
 	b.WriteString(" */")
+	return b.String(), nil
+}
+
+func buildJSOneofTypedef(msg ir.Message, name string, msgIndex map[string]ir.Message) (string, error) {
+	var b strings.Builder
+	b.WriteString("/**\n")
+	b.WriteString(" * @typedef {Object} ")
+	b.WriteString(oneofType(msg, name))
+	b.WriteString("\n")
+	for _, field := range oneofFields(msg, name) {
+		jsType, err := jsDocType(field, msgIndex)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(" * @property {")
+		b.WriteString(jsType)
+		b.WriteString("} [")
+		b.WriteString(field.Name)
+		b.WriteString("]\n")
+	}
+	b.WriteString(" */")
+	return b.String(), nil
+}
+
+func oneofType(msg ir.Message, name string) string { return msg.Name + ir.GoName(name) + "Oneof" }
+
+func oneofProp(name string) string { return ir.JsName(name) }
+
+func oneofRequired(msg ir.Message, name string) bool {
+	for _, g := range msg.Oneofs {
+		if g.Name == name {
+			return g.Required
+		}
+	}
+	return false
+}
+
+func messageOneofs(msg ir.Message) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, field := range msg.Fields {
+		if field.OneofName == "" || seen[field.OneofName] {
+			continue
+		}
+		seen[field.OneofName] = true
+		names = append(names, field.OneofName)
+	}
+	return names
+}
+
+func oneofFields(msg ir.Message, name string) []ir.Field {
+	var fields []ir.Field
+	for _, field := range msg.Fields {
+		if field.OneofName == name {
+			fields = append(fields, field)
+		}
+	}
+	return fields
+}
+
+func buildJSOneofWrite(msg ir.Message, name string, msgIndex map[string]ir.Message) (string, error) {
+	var fields []ir.Field
+	for _, field := range oneofFields(msg, name) {
+		if field.JsEncode {
+			fields = append(fields, field)
+		}
+	}
+	if len(fields) == 0 {
+		return "", nil
+	}
+	prop := "message." + oneofProp(name)
+	label := msg.Name + "." + oneofProp(name)
+	required := oneofRequired(msg, name)
+	var b strings.Builder
+	fmt.Fprintf(&b, "    if (%s !== undefined && %s !== null) {\n", prop, prop)
+	b.WriteString("        const selected = [")
+	for i, field := range fields {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(prop + "." + field.Name)
+	}
+	b.WriteString("].filter((v) => v !== undefined && v !== null).length;\n")
+	if required {
+		b.WriteString("        if (selected !== 1) {\n")
+		fmt.Fprintf(&b, "            throw new Error(\"%s: expected exactly one alternative, got \" + selected);\n", label)
+	} else {
+		b.WriteString("        if (selected > 1) {\n")
+		fmt.Fprintf(&b, "            throw new Error(\"%s: expected at most one alternative, got \" + selected);\n", label)
+	}
+	b.WriteString("        }\n")
+	for _, field := range fields {
+		alt := prop + "." + field.Name
+		fmt.Fprintf(&b, "        if (%s !== undefined && %s !== null) {\n", alt, alt)
+		lines, err := jsEncodeField(field, msgIndex, alt, "            ")
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(lines)
+		b.WriteString("        }\n")
+	}
+	b.WriteString("    }")
+	if required {
+		b.WriteString(" else {\n")
+		fmt.Fprintf(&b, "        throw new Error(\"%s: expected exactly one alternative, got none\");\n", label)
+		b.WriteString("    }")
+	}
+	b.WriteString("\n")
 	return b.String(), nil
 }
 
@@ -625,6 +750,7 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 	needsDuration := false
 	fmt.Fprintf(&b, "/**\n * @param {%s} message\n * @param {Writer} writer\n */\n", msg.Name)
 	fmt.Fprintf(&b, "export function write%s(message, writer) {\n", msg.Name)
+	writtenOneofs := map[string]bool{}
 	for _, field := range msg.Fields {
 		if !field.JsEncode {
 			continue
@@ -635,6 +761,18 @@ func buildWriteFunc(msg ir.Message, msgIndex map[string]ir.Message) (string, boo
 		}
 		if field.IsDuration {
 			needsDuration = true
+		}
+		if field.OneofName != "" {
+			if writtenOneofs[field.OneofName] {
+				continue
+			}
+			writtenOneofs[field.OneofName] = true
+			lines, err := buildJSOneofWrite(msg, field.OneofName, msgIndex)
+			if err != nil {
+				return "", false, false, false, err
+			}
+			b.WriteString(lines)
+			continue
 		}
 		if field.IsMap {
 			b.WriteString("    if (message.")
@@ -764,9 +902,25 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 	fmt.Fprintf(&b, "function decode%sMessage(reader, length) {\n", msg.Name)
 	b.WriteString("    const end = length === undefined ? reader.len : reader.pos + length;\n")
 	b.WriteString("    const message = {")
-	for i, field := range msg.Fields {
-		if i > 0 {
+	seenOneofs := map[string]bool{}
+	first := true
+	for _, field := range msg.Fields {
+		if field.OneofName != "" && seenOneofs[field.OneofName] {
+			continue
+		}
+		if !first {
 			b.WriteString(", ")
+		}
+		first = false
+		if field.OneofName != "" {
+			seenOneofs[field.OneofName] = true
+			b.WriteString(oneofProp(field.OneofName))
+			if oneofRequired(msg, field.OneofName) {
+				b.WriteString(": {}")
+			} else {
+				b.WriteString(": undefined")
+			}
+			continue
 		}
 		b.WriteString(field.Name)
 		b.WriteString(": ")
@@ -780,7 +934,16 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 		b.WriteString("            case ")
 		b.WriteString(fmt.Sprintf("%d", field.Number))
 		b.WriteString(": {\n")
-		lines, usesReadInt64, usesTimestamp, err := jsDecodeField(field, msgIndex, "message")
+		var lines string
+		var usesReadInt64, usesTimestamp bool
+		var err error
+		if field.OneofName != "" {
+			var expr string
+			expr, usesReadInt64, usesTimestamp, err = jsDecodeValueExpr(field, msgIndex)
+			lines = "                message." + oneofProp(field.OneofName) + " = { " + field.Name + ": " + expr + " };\n"
+		} else {
+			lines, usesReadInt64, usesTimestamp, err = jsDecodeField(field, msgIndex, "message")
+		}
 		if err != nil {
 			return "", false, false, false, err
 		}
@@ -1031,31 +1194,36 @@ func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string
 		fmt.Fprintf(&b, "                %s.push(reader.%s());\n", fieldName, jsReaderMethod(field.Kind))
 		return b.String(), false, false, nil
 	}
+	expr, needsReadInt64, needsTimestamp, err := jsDecodeValueExpr(field, msgIndex)
+	if err != nil {
+		return "", false, false, err
+	}
+	fmt.Fprintf(&b, "                %s = %s;\n", fieldName, expr)
+	return b.String(), needsReadInt64, needsTimestamp, nil
+}
+
+func jsDecodeValueExpr(field ir.Field, msgIndex map[string]ir.Message) (string, bool, bool, error) {
+	if field.JSType != "" {
+		expr, needsReadInt64, err := jsDecodeNativeExpr(field)
+		return expr, needsReadInt64, false, err
+	}
 	if field.IsTimestamp {
-		lines, needsReadInt64 := jsDecodeTimestampSingle(fieldName, field)
-		b.WriteString(lines)
-		return b.String(), needsReadInt64, true, nil
+		return "decodeTimestampMessage(reader, reader.uint32())", true, true, nil
 	}
 	if field.IsDuration {
-		lines, needsReadInt64 := jsDecodeDurationSingle(fieldName)
-		b.WriteString(lines)
-		return b.String(), needsReadInt64, false, nil
+		return "decodeDurationMessage(reader, reader.uint32())", true, false, nil
 	}
-
 	if field.Kind == ir.KindMessage {
 		msg, ok := msgIndex[field.MessageFullName]
 		if !ok {
 			return "", false, false, fmt.Errorf("unknown message type: %s", field.MessageFullName)
 		}
-		fmt.Fprintf(&b, "                %s = decode%sMessage(reader, reader.uint32());\n", fieldName, msg.Name)
-		return b.String(), false, false, nil
+		return "decode" + msg.Name + "Message(reader, reader.uint32())", false, false, nil
 	}
 	if isJSReadInt64(field) {
-		fmt.Fprintf(&b, "                %s = readInt64(reader, \"%s\");\n", fieldName, jsReaderMethod(field.Kind))
-		return b.String(), true, false, nil
+		return "readInt64(reader, \"" + jsReaderMethod(field.Kind) + "\")", true, false, nil
 	}
-	fmt.Fprintf(&b, "                %s = reader.%s();\n", fieldName, jsReaderMethod(field.Kind))
-	return b.String(), false, false, nil
+	return "reader." + jsReaderMethod(field.Kind) + "()", false, false, nil
 }
 
 func jsEncodeNativeField(field ir.Field, name, indent string) (string, error) {
@@ -1506,27 +1674,11 @@ func jsDecodePackedField(fieldName string, field ir.Field) (string, bool) {
 	return b.String(), needsReadInt64
 }
 
-func jsDecodeTimestampSingle(fieldName string, field ir.Field) (string, bool) {
-	var b strings.Builder
-	b.WriteString("                ")
-	b.WriteString(fieldName)
-	b.WriteString(" = decodeTimestampMessage(reader, reader.uint32());\n")
-	return b.String(), true
-}
-
 func jsDecodeTimestampRepeated(fieldName string, field ir.Field) (string, bool) {
 	var b strings.Builder
 	b.WriteString("                ")
 	b.WriteString(fieldName)
 	b.WriteString(".push(decodeTimestampMessage(reader, reader.uint32()));\n")
-	return b.String(), true
-}
-
-func jsDecodeDurationSingle(fieldName string) (string, bool) {
-	var b strings.Builder
-	b.WriteString("                ")
-	b.WriteString(fieldName)
-	b.WriteString(" = decodeDurationMessage(reader, reader.uint32());\n")
 	return b.String(), true
 }
 

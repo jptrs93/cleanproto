@@ -104,6 +104,31 @@ Now `CertSource.Value` is `CertSourceValueOneof` directly. The empty message is 
 
 The group's alternatives keep their parent message's protobuf tag namespace. A DSL with separate field and alternative tag scopes must still emit a wrapper message. There is no flattening heuristic or DSL-specific inference in cleanproto.
 
+### JavaScript and TypeScript
+
+The same schema generates a nested object instead of a pointer struct. The message property is named after the oneof (camelCase, like any field) and holds either `undefined` or an object with exactly one own property set, named after the selected alternative. TypeScript names the group `<Message><Oneof>Oneof`, as Go does; JavaScript emits the same shapes as JSDoc `@typedef`s.
+
+```ts
+export interface CertSourceValueOneof {
+  acme?: AcmeCertSource;
+  secret?: SecretCertSource;
+}
+export interface CertSource {
+  value: CertSourceValueOneof;
+}
+
+const source: CertSource = { value: { acme: { email: 'ops@example.com', domains: [] } } };
+if (source.value.acme !== undefined) {
+  console.log(source.value.acme.email);
+}
+```
+
+An ordinary oneof is typed `value?: CertSourceValueOneof` and decodes as `undefined` when no alternative was on the wire. A required group (`(buf.validate.oneof).required = true`) is non-optional and decodes an empty message as `{}`, mirroring Go's `Maybe` versus direct value. Alternatives use the ordinary field representations: message objects, numbers, strings, `Uint8Array`, enum numbers, and `Date`, `number`, or `bigint` for Timestamp and Duration per `cp.js_type`/`cp.ts_type`.
+
+- Encoding writes the alternative that is neither `undefined` nor `null` with its own field tag; a present scalar zero, `false`, empty string, or empty bytes is emitted. It throws an `Error` naming the message and oneof when more than one alternative is set, and when a required group is `undefined` or has no alternative set. An ordinary group that is `undefined` encodes nothing.
+- Decoding sets `message.value = { <alternative>: value }` for each oneof tag it reads, so a later alternative replaces an earlier one. Repeated occurrences of the same message alternative replace rather than merge, as singular message fields do in the JS/TS decoders; Go merges them.
+- JS and TS skip unknown fields rather than retaining them, as before.
+
 ### Optional payloads and collections
 
 Protobuf has no directly optional oneof alternative, repeated/map alternative, optional collection, or optional list element. Represent these with explicit wrapper messages. For example, selecting `NullableBook { Book value = 1; }` distinguishes no choice from a selected payload whose `Value` is absent. The wrapper stays a Go struct; it is not implicitly converted into `Maybe[Book]`. Similarly, use a message containing a repeated field for an optional list or list-valued choice. Nested Go `Maybe` forms are not inferred from arbitrary wrapper shapes.
@@ -123,7 +148,7 @@ Protobuf has no directly optional oneof alternative, repeated/map alternative, o
 
 ## Generation boundaries
 
-Go supports the new oneof mapping. JS and TS retain their existing field representations and **explicitly reject oneof schemas** until their own mappings are implemented. The CLI generates all requested outputs in memory before writing, so a rejected target does not leave a partial generation.
+Go, JS, and TS all support the oneof mapping: Go as `Maybe`-wrapped or direct choice structs with pointer alternatives, JS and TS as the nested `<Message><Oneof>Oneof` object described above. The CLI generates all requested outputs in memory before writing, so a failing target does not leave a partial generation.
 
 Supply related input protos together when generating one Go package. Inputs with the same Go package are combined into one set of output files; different Go packages sharing an output directory are rejected. Cross-package Go import generation is not added by this change. Conflicting generated type/helper/member names produce errors instead of invalid or overwritten code.
 

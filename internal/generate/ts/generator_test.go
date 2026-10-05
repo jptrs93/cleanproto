@@ -38,6 +38,17 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
+func parseChoices(t *testing.T) []ir.File {
+	t.Helper()
+	root := repoRoot(t)
+	p := schemaparser.Parser{ImportPaths: []string{filepath.Join(root, "example"), root}}
+	files, err := p.Parse(context.Background(), []string{"choices.proto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
 func parseWide(t *testing.T) []ir.File {
 	t.Helper()
 	dir := t.TempDir()
@@ -103,6 +114,39 @@ func runNodeScript(t *testing.T, dir, name string) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("node: %v\n%s", err, out)
 	}
+}
+
+func TestTSOneofGeneration(t *testing.T) {
+	model := generateTS(t, parseChoices(t), t.TempDir())
+	for _, want := range []string{
+		"export interface CertSourceValueOneof {\n  acme?: AcmeCertSource;\n  secret?: SecretCertSource;\n}",
+		"export interface CertSource {\n  value: CertSourceValueOneof;\n}",
+		"export interface CoverageChoiceOneof {\n  acme?: AcmeCertSource;\n  number?: number;\n  blob?: Uint8Array;\n  ignored?: string;\n  secret?: SecretCertSource;\n}",
+		"  requiredChild?: AcmeCertSource;\n  choice?: CoverageChoiceOneof;\n}",
+		"export interface ScalarChoiceValueOneof {\n  flag?: boolean;\n  text?: string;\n  data?: Uint8Array;\n  status?: number;\n  updated?: Date;\n  delay?: number;\n  uuid?: Uint8Array;\n}",
+		"const selected = [message.value.acme, message.value.secret].filter((v) => v !== undefined && v !== null).length;",
+		"throw new Error(\"CertSource.value: expected exactly one alternative, got \" + selected);",
+		"throw new Error(\"CertSource.value: expected exactly one alternative, got none\");",
+		"throw new Error(\"ScalarChoice.value: expected at most one alternative, got \" + selected);",
+		"    const message: CertSource = {value: {} };",
+		"    const message: ScalarChoice = {value: undefined };",
+		"message.value = { acme: decodeAcmeCertSourceMessage(reader, reader.uint32()) };",
+		"message.choice = { number: reader.int32() };",
+		"message.value = { flag: reader.bool() };",
+		"message.value = { updated: decodeTimestampMessage(reader, reader.uint32()) };",
+		"message.value = { delay: decodeDurationMessage(reader, reader.uint32()) };",
+	} {
+		if !strings.Contains(model, want) {
+			t.Errorf("missing %q in:\n%s", want, model)
+		}
+	}
+}
+
+func TestTSOneofNodeRoundTrip(t *testing.T) {
+	requireNodeWithTypes(t)
+	dir := t.TempDir()
+	generateTS(t, parseChoices(t), dir)
+	runNodeScript(t, dir, "oneof_roundtrip.mts")
 }
 
 func TestTSInt64KindsAsNumberAndBigInt(t *testing.T) {

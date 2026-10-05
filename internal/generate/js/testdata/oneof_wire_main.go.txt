@@ -1,0 +1,51 @@
+package main
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"time"
+
+	"github.com/google/uuid"
+
+	choices "choices.test"
+)
+
+func main() {
+	flag := true
+	text := "hi"
+	data := []byte{}
+	status := choices.Status(1)
+	updated := time.Unix(1700000000, 123000000).UTC()
+	delay := 1500 * time.Millisecond
+	id := uuid.MustParse("0102030405060708090a0b0c0d0e0f10")
+	zero := int32(0)
+	cert := func(v choices.CertSourceValueOneof) []byte {
+		m := choices.CertSource{Value: v}
+		return m.Encode()
+	}
+	scalar := func(v choices.ScalarChoiceValueOneof) []byte {
+		m := choices.ScalarChoice{Value: choices.Maybe[choices.ScalarChoiceValueOneof]{Value: v, Present: true}}
+		return m.Encode()
+	}
+	none := choices.ScalarChoice{}
+	coverage := choices.Coverage{Choice: choices.Maybe[choices.CoverageChoiceOneof]{Value: choices.CoverageChoiceOneof{Number: &zero}, Present: true}}
+	cases := map[string][]byte{
+		"cert_acme":       cert(choices.CertSourceValueOneof{Acme: &choices.AcmeCertSource{Email: "ops@example.com", Domains: []string{"a", "b"}}}),
+		"cert_secret":     cert(choices.CertSourceValueOneof{Secret: &choices.SecretCertSource{Name: "n", Secret: []byte{1, 2, 3}}}),
+		"scalar_flag":     scalar(choices.ScalarChoiceValueOneof{Flag: &flag}),
+		"scalar_text":     scalar(choices.ScalarChoiceValueOneof{Text: &text}),
+		"scalar_data":     scalar(choices.ScalarChoiceValueOneof{Data: &data}),
+		"scalar_status":   scalar(choices.ScalarChoiceValueOneof{Status: &status}),
+		"scalar_updated":  scalar(choices.ScalarChoiceValueOneof{Updated: &updated}),
+		"scalar_delay":    scalar(choices.ScalarChoiceValueOneof{Delay: &delay}),
+		"scalar_uuid":     scalar(choices.ScalarChoiceValueOneof{Uuid: &id}),
+		"scalar_none":     none.Encode(),
+		"coverage_number": coverage.Encode(),
+	}
+	out := map[string]string{}
+	for name, wire := range cases {
+		out[name] = hex.EncodeToString(wire)
+	}
+	json.NewEncoder(os.Stdout).Encode(out)
+}

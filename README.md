@@ -4,7 +4,7 @@ A minimal proto3 generator that generates clean, fast, readable code, supporting
 
 Currently supports Go, JavaScript, and TypeScript.
 
-Go models use `Maybe[T]` for explicit presence, value slices/maps for messages, and named pointer-based choice structs for oneofs. This changes the generated Go API; see [the mapping and migration guide](MIGRATION.md). Oneof support is currently Go-only.
+Go models use `Maybe[T]` for explicit presence, value slices/maps for messages, and named pointer-based choice structs for oneofs; JavaScript and TypeScript represent a oneof as a nested object holding the one selected alternative. This changes the generated Go API; see [the mapping and migration guide](MIGRATION.md) for the Go, JS, and TS oneof shapes.
 
 | Language | Models | Client stubs | Server stubs | Server-streaming RPC | Client-streaming RPC | Bidi-streaming RPC |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -848,7 +848,7 @@ export class Capi {
 
 ## Notes
 - Go retains unknown fields on ordinary messages; native conversions and map-entry envelopes have the limits described in [the migration guide](MIGRATION.md). JS/TS still skip unknown fields.
-- Go supports named oneofs without automatic flattening. JS/TS reject oneof schemas explicitly.
+- Go, JS, and TS support named oneofs without automatic flattening: Go as a pointer-based choice struct, JS/TS as a `<Message><Oneof>Oneof` object with exactly one alternative property set.
 - `cp.<lang>_ignore = true` takes precedence over `cp.<lang>_encode = false` for that language, since ignored fields are omitted entirely.
 
 ## Todo
