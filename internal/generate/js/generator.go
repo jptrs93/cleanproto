@@ -969,7 +969,15 @@ func buildDecodeMessageFunc(msg ir.Message, msgIndex map[string]ir.Message) (str
 	return b.String(), needsReadInt64, needsTimestamp, needsDuration, nil
 }
 
+func jsEffectiveField(field ir.Field) ir.Field {
+	if field.JSType == "" && !field.IsMap && isJSReadInt64(field) {
+		field.JSType = "bigint"
+	}
+	return field
+}
+
 func jsDocType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
+	field = jsEffectiveField(field)
 	if field.IsMap {
 		valueType, err := jsMapValueType(field, msgIndex)
 		if err != nil {
@@ -988,6 +996,7 @@ func jsDocType(field ir.Field, msgIndex map[string]ir.Message) (string, error) {
 }
 
 func jsDefaultValue(field ir.Field, msgIndex map[string]ir.Message) string {
+	field = jsEffectiveField(field)
 	if field.IsMap {
 		return "{}"
 	}
@@ -1073,6 +1082,7 @@ func jsBaseType(field ir.Field, msgIndex map[string]ir.Message) (string, error) 
 }
 
 func jsPresenceCheck(field ir.Field, name string) string {
+	field = jsEffectiveField(field)
 	if field.IsOptional {
 		return name + " !== undefined && " + name + " !== null"
 	}
@@ -1107,6 +1117,7 @@ func jsPresenceCheck(field ir.Field, name string) string {
 }
 
 func jsEncodeField(field ir.Field, msgIndex map[string]ir.Message, name, indent string) (string, error) {
+	field = jsEffectiveField(field)
 	var b strings.Builder
 	if field.JSType != "" {
 		lines, err := jsEncodeNativeField(field, name, indent)
@@ -1145,6 +1156,7 @@ func jsEncodeField(field ir.Field, msgIndex map[string]ir.Message, name, indent 
 }
 
 func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string) (string, bool, bool, error) {
+	field = jsEffectiveField(field)
 	var b strings.Builder
 	fieldName := target + "." + field.Name
 	if field.JSType != "" {
@@ -1203,6 +1215,7 @@ func jsDecodeField(field ir.Field, msgIndex map[string]ir.Message, target string
 }
 
 func jsDecodeValueExpr(field ir.Field, msgIndex map[string]ir.Message) (string, bool, bool, error) {
+	field = jsEffectiveField(field)
 	if field.JSType != "" {
 		expr, needsReadInt64, err := jsDecodeNativeExpr(field)
 		return expr, needsReadInt64, false, err
@@ -1500,6 +1513,8 @@ func jsMapValueType(field ir.Field, msgIndex map[string]ir.Message) (string, err
 		return "boolean", nil
 	case ir.KindString:
 		return "string", nil
+	case ir.KindInt64, ir.KindUint64, ir.KindSint64, ir.KindFixed64, ir.KindSfixed64:
+		return "bigint", nil
 	default:
 		return "number", nil
 	}
@@ -1555,6 +1570,8 @@ func jsMapValuePresence(kind ir.Kind) string {
 		return "value !== undefined && value !== null && value !== \"\""
 	case ir.KindBool:
 		return "value === true"
+	case ir.KindInt64, ir.KindUint64, ir.KindSint64, ir.KindFixed64, ir.KindSfixed64:
+		return "value !== undefined && value !== null && value !== 0n"
 	default:
 		return "value !== undefined && value !== null && value !== 0"
 	}
@@ -1614,7 +1631,7 @@ func jsReadMapValue(field ir.Field, msgIndex map[string]ir.Message) (string, boo
 		return "                            value = decode" + msg.Name + "Message(reader, reader.uint32());\n", false, nil
 	}
 	if isJSReadInt64(ir.Field{Kind: field.MapValueKind}) {
-		return "                            value = readInt64(reader, \"" + jsReaderMethod(field.MapValueKind) + "\");\n", true, nil
+		return "                            value = readInt64BigInt(reader, \"" + jsReaderMethod(field.MapValueKind) + "\");\n", true, nil
 	}
 	return "                            value = reader." + jsReaderMethod(field.MapValueKind) + "();\n", false, nil
 }
@@ -1647,6 +1664,8 @@ func jsMapValueDefault(field ir.Field, msgIndex map[string]ir.Message) string {
 		return "new Uint8Array(0)"
 	case ir.KindMessage:
 		return "undefined"
+	case ir.KindInt64, ir.KindUint64, ir.KindSint64, ir.KindFixed64, ir.KindSfixed64:
+		return "0n"
 	default:
 		return "0"
 	}

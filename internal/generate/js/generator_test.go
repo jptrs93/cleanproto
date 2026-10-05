@@ -27,6 +27,8 @@ message Wide {
   uint64 plain = 6;
   sfixed64 sfixed_big = 7 [(cp.js_type) = "bigint", (cp.ts_type) = "bigint"];
   repeated uint64 bigs = 8 [packed = false, (cp.js_type) = "bigint", (cp.ts_type) = "bigint"];
+  repeated int64 plains = 9;
+  map<string, int64> totals = 10;
 }
 `
 
@@ -179,21 +181,27 @@ func TestJSInt64KindsAsNumberAndBigInt(t *testing.T) {
 	dir := t.TempDir()
 	model := generateJS(t, parseWide(t), filepath.Join(dir, "js"))
 	for _, want := range []string{
-		" * @property {number} num\n * @property {bigint} big\n * @property {number[]} nums\n * @property {number} fixed\n * @property {number} signed\n * @property {number} plain\n * @property {bigint} sfixedBig\n * @property {bigint[]} bigs\n",
+		" * @property {number} num\n * @property {bigint} big\n * @property {number[]} nums\n * @property {number} fixed\n * @property {number} signed\n * @property {bigint} plain\n * @property {bigint} sfixedBig\n * @property {bigint[]} bigs\n * @property {bigint[]} plains\n * @property {Object.<string, bigint>} totals\n",
 		"writer.uint32(tag(1, WIRE.VARINT)).uint64(Math.trunc(message.num));",
 		"writer.uint32(tag(2, WIRE.VARINT)).uint64(message.big.toString());",
 		"writer.uint32(tag(4, WIRE.FIXED64)).fixed64(Math.trunc(message.fixed));",
 		"writer.uint32(tag(5, WIRE.VARINT)).sint64(Math.trunc(message.signed));",
 		"writer.uint32(tag(7, WIRE.FIXED64)).sfixed64(message.sfixedBig.toString());",
+		"writer.uint32(tag(6, WIRE.VARINT)).uint64(message.plain.toString());",
 		"writer.uint32(tag(8, WIRE.VARINT)).uint64(item.toString());",
-		"const message = {num: 0, big: 0n, nums: [], fixed: 0, signed: 0, plain: 0, sfixedBig: 0n, bigs: [] };",
+		"if (value !== undefined && value !== null && value !== 0n) {",
+		"const message = {num: 0, big: 0n, nums: [], fixed: 0, signed: 0, plain: 0n, sfixedBig: 0n, bigs: [], plains: [], totals: {} };",
 		"message.num = readInt64(reader, \"uint64\");",
 		"message.big = readInt64BigInt(reader, \"uint64\");",
 		"message.nums.push(readInt64(reader, \"uint64\"));",
 		"message.fixed = readInt64(reader, \"fixed64\");",
 		"message.signed = readInt64(reader, \"sint64\");",
 		"message.sfixedBig = readInt64BigInt(reader, \"sfixed64\");",
+		"message.plain = readInt64BigInt(reader, \"uint64\");",
 		"message.bigs.push(readInt64BigInt(reader, \"uint64\"));",
+		"message.plains.push(readInt64BigInt(reader, \"int64\"));",
+		"let value = 0n;",
+		"value = readInt64BigInt(reader, \"int64\");",
 		"if (!Number.isSafeInteger(n)) {",
 	} {
 		if !strings.Contains(model, want) {

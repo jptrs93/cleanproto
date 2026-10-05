@@ -77,7 +77,7 @@ This generates `Date` in JavaScript and `Maybe[time.Time]` in Go, preserving the
 > [!NOTE]
 > Native type conversion is standardized and may lose precision when the proto wire type is less precise than the selected native type. For example, if the native JavaScript type is `Date` but the wire type is `int32`, then values are converted to and from epoch seconds to fit `int32` precision. With `int64`, `Date`/`time.Time` values are converted to and from epoch milliseconds.
 >
-> A 64-bit integer field represented as a JavaScript `number` (JS defaults to `number`; TS defaults to `bigint` unless `cp.ts_type = "number"`) is guarded by `Number.MAX_SAFE_INTEGER`: encoding throws when the value is outside the safe integer range, and decoding throws when the wire value does not fit, instead of silently losing precision.
+> A 64-bit integer field (`int64`, `uint64`, `sint64`, `fixed64`, `sfixed64`, including repeated fields and map values) is a `bigint` in JavaScript and TypeScript unless `cp.js_type = "number"` or `cp.ts_type = "number"` is set. A field represented as a `number` is guarded by `Number.MAX_SAFE_INTEGER`: encoding throws when the value is outside the safe integer range, and decoding throws when the wire value does not fit, instead of silently losing precision. Map values take no option and stay `bigint`.
 
 ### Additional options
 
@@ -163,7 +163,7 @@ See [the complete Go mapping](MIGRATION.md) for presence and choice semantics.
 ```js
 /**
  * @typedef {Object} AuditEvent
- * @property {number} occurredAt
+ * @property {bigint} occurredAt
  * @property {bigint} timeout
  * @property {Uint8Array} requestId
  * @property {bigint} actorId
@@ -178,8 +178,8 @@ See [the complete Go mapping](MIGRATION.md) for presence and choice semantics.
 import { Reader, Writer } from './runtime.js';
 
 export function writeAuditEvent(message, writer) {
-    if (message.occurredAt !== undefined && message.occurredAt !== null && message.occurredAt !== 0) {
-        writer.uint32(tag(1, WIRE.VARINT)).int64(message.occurredAt);
+    if (message.occurredAt !== undefined && message.occurredAt !== null && message.occurredAt !== 0n) {
+        writer.uint32(tag(1, WIRE.VARINT)).int64(message.occurredAt.toString());
     }
     if (message.timeout !== undefined && message.timeout !== null && message.timeout !== 0n) {
         writer.uint32(tag(2, WIRE.LDELIM)).fork();
@@ -207,12 +207,12 @@ export function encodeAuditEvent(message) {
 
 function decodeAuditEventMessage(reader, length) {
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = {occurredAt: 0, timeout: 0n, requestId: new Uint8Array(0), actorId: 0n, syncedAt: 0 };
+    const message = {occurredAt: 0n, timeout: 0n, requestId: new Uint8Array(0), actorId: 0n, syncedAt: 0 };
     while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
             case 1: {
-                message.occurredAt = readInt64(reader, "int64");
+                message.occurredAt = readInt64BigInt(reader, "int64");
                 break;
             }
             case 2: {
